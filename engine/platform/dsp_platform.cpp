@@ -1,5 +1,7 @@
-// macOS replacements for the Windows-only helpers the DSP core links against:
-// registry (in-memory), wide file I/O, wide string conversion, hardware stubs.
+// Portable replacements for the Windows-only helpers the DSP core links against, used on every
+// platform: registry (in-memory, per thread), wide file I/O, wide string conversion, hardware stubs.
+// Windows keeps the in-memory registry too: the real one would be shared between DfxDsp instances
+// and threads, and would leave keys behind in HKCU.
 #include "codedefs.h"
 #include "slout.h"
 #include <string>
@@ -58,6 +60,18 @@ int pstrCalcLocationOfStrInStr_Wide(wchar_t* hay, wchar_t* needle, int start, in
 }
 
 // ---- files ----
+#ifdef _WIN32
+// Writes are binary so presets keep LF line ends, byte-identical to the macOS build (text-mode
+// reads accept both).
+FILE* fileOpen_Wide(wchar_t* path, wchar_t* mode, CSlout*) {
+    std::wstring m = mode;
+    if (m.find(L'b') == std::wstring::npos && m.find_first_of(L"wa") != std::wstring::npos) m += L'b';
+    return _wfopen(path, m.c_str());
+}
+int fileExist_Wide(wchar_t* path, int* exists) {
+    struct _stat st; *exists = _wstat(path, &st) == 0; return OKAY;
+}
+#else
 // Legacy code joins paths with backslashes (valsSave writes "<dir>\<name>.fac"); map them to '/'.
 static std::string posixPath(const wchar_t* path) {
     std::string out = narrow(path);
@@ -70,6 +84,7 @@ FILE* fileOpen_Wide(wchar_t* path, wchar_t* mode, CSlout*) {
 int fileExist_Wide(wchar_t* path, int* exists) {
     struct stat st; *exists = stat(posixPath(path).c_str(), &st) == 0; return OKAY;
 }
+#endif
 
 // ---- registry: in-memory key/value, one table per thread ----
 // The DSP keeps settings in this "registry" and re-reads it inside processAudio(). Each thread

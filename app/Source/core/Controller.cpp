@@ -1,6 +1,6 @@
 #include "Controller.h"
-#include "LoginItem.h"
-#include "MicrophoneAccess.h"
+#include "platform/LoginItem.h"
+#include "platform/MicrophoneAccess.h"
 #include "Presets.h"
 
 namespace

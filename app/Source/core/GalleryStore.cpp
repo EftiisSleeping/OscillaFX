@@ -1,9 +1,11 @@
 #include "GalleryStore.h"
 #include "AppPaths.h"
-#include "ImageValidation.h"
-#include <climits>
-#include <cstdlib>
-#include <sys/stat.h>
+#include "platform/ImageValidation.h"
+#if ! JUCE_WINDOWS
+ #include <climits>
+ #include <cstdlib>
+ #include <sys/stat.h>
+#endif
 
 namespace
 {
@@ -12,6 +14,22 @@ const char* const TEMP_PREFIX = ".oscilla-import-";
 constexpr int MAX_STEM_LENGTH = 60;
 constexpr int MAX_UNIQUE_SUFFIX = 9999;
 
+#if JUCE_WINDOWS
+// Symlinks / junctions on the file itself resolved (JUCE uses GetFinalPathNameByHandle); empty when
+// the path does not exist.
+juce::String realPath (const juce::File& file)
+{
+    return file.exists() ? file.getLinkedTarget().getFullPathName() : juce::String();
+}
+
+bool isRegularFile (const juce::String& path) { return juce::File (path).existsAsFile(); }
+
+juce::int64 fileSize (const juce::String& path)
+{
+    const juce::File file (path);
+    return file.existsAsFile() ? file.getSize() : -1;
+}
+#else
 // Symlinks and ".." resolved; empty when the path does not exist.
 juce::String realPath (const juce::File& file)
 {
@@ -32,6 +50,7 @@ juce::int64 fileSize (const juce::String& path)
     struct stat info {};
     return ::stat (path.toRawUTF8(), &info) == 0 ? (juce::int64) info.st_size : -1;
 }
+#endif
 
 // Letters, digits, space, dash, underscore; never empty, never a dotfile, never long.
 juce::String safeStem (const juce::File& source)
@@ -81,7 +100,7 @@ juce::File GalleryStore::defaultUserDirectory()
 
 juce::File GalleryStore::defaultBundledDirectory()
 {
-    return juce::File::getSpecialLocation (juce::File::currentApplicationFile).getChildFile ("Contents/Resources/Gallery");
+    return AppPaths::resourcesDirectory().getChildFile ("Gallery");
 }
 
 juce::Array<juce::File> GalleryStore::images() const

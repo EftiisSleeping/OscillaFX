@@ -1,0 +1,3 @@
+# Presets are compared byte for byte with what engine/tools/make_preset writes: never convert line ends.
+*.fac -text
+*.sh text eol=lf

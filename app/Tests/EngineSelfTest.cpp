@@ -1,12 +1,11 @@
 // Headless checks for the audio platform layer. Never starts routing or touches the system default device.
 #include "audio/AudioEngine.h"
-#include "audio/CoreAudioHelpers.h"
-#include "audio/CrashWatchdog.h"
 #include "audio/DriftResampler.h"
 #include "audio/Dynamics.h"
 #include "audio/DspParams.h"
 #include "audio/SpscRingBuffer.h"
 #include "audio/TripleBuffer.h"
+#include "core/AppPaths.h"
 #include "core/AppPrefs.h"
 #include "core/Controller.h"
 #include "core/DeviceKind.h"
@@ -15,16 +14,24 @@
 #include "core/StarterProfiles.h"
 #include "core/SuggestionTracker.h"
 #include "ImageFixtures.h"
+#include "platform/CrashWatchdog.h"
 #include "profiles/ProfileStore.h"
 #include "DfxDsp.h"
 
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <random>
-#include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
+
+#if JUCE_MAC
+ #include "audio/mac/CoreAudioHelpers.h"
+ #include <unistd.h>
+#endif
+#if JUCE_WINDOWS
+ #include <stdlib.h>
+#endif
 
 namespace
 {
@@ -39,14 +46,28 @@ void check (bool ok, const juce::String& what)
 
 bool near (double a, double b, double tolerance) { return std::abs (a - b) <= tolerance; }
 
+void setEnvironment (const char* name, const juce::String& value)
+{
+   #if JUCE_WINDOWS
+    _putenv_s (name, value.toRawUTF8());   // an empty value removes the variable
+   #else
+    if (value.isEmpty())
+        ::unsetenv (name);
+    else
+        ::setenv (name, value.toRawUTF8(), 1);
+   #endif
+}
+
 void testDeviceListing()
 {
     std::printf ("devices\n");
+   #if JUCE_MAC
     for (auto id : CoreAudioHelpers::allDevices())
         std::printf ("  %-32s uid=%-40s out=%d builtin=%d rate=%.0f\n",
                      CoreAudioHelpers::deviceName (id).toRawUTF8(), CoreAudioHelpers::deviceUid (id).toRawUTF8(),
                      CoreAudioHelpers::outputChannelCount (id), (int) CoreAudioHelpers::isBuiltIn (id),
                      CoreAudioHelpers::nominalSampleRate (id));
+   #endif
 
     AudioEngine engine; // constructed only; start() is never called here
     auto outputs = engine.outputDevices();
@@ -376,7 +397,7 @@ void testRestoreRecord()
     const auto saved = file.loadFileAsString();
 
     check (CrashWatchdog::writeRestoreUid ("SelfTest_UID"), "record written");
-    check (file.loadFileAsString() == juce::String (getpid()) + "\nSelfTest_UID\n", "record is <pid>\\n<uid>");
+    check (file.loadFileAsString() == juce::String (CrashWatchdog::currentProcessId()) + "\nSelfTest_UID\n", "record is <pid>\\n<uid>");
     check (CrashWatchdog::readRestoreUid() == "SelfTest_UID", "uid read back");
     file.replaceWithText ("Legacy_UID");
     check (CrashWatchdog::readRestoreUid() == "Legacy_UID", "legacy single-line record read");
@@ -462,6 +483,7 @@ void testDeviceKinds()
     ids.removeDuplicates (false);
     check (ids.size() == 8, "kind ids are unique");
 
+   #if JUCE_MAC
     // Live facts: whatever CoreAudio reports for this machine's outputs must classify without surprises.
     for (auto id : CoreAudioHelpers::allDevices())
         if (CoreAudioHelpers::outputChannelCount (id) > 0)
@@ -470,6 +492,7 @@ void testDeviceKinds()
             std::printf ("  live: %-30s transport=%08x source=%08x -> %s\n", traits.name.toRawUTF8(), traits.transport,
                          traits.dataSource, DeviceKinds::id (DeviceKinds::classify (traits)).toRawUTF8());
         }
+   #endif
 }
 
 // ---- starter profiles
@@ -670,10 +693,13 @@ void testGalleryStore()
         { "photo.png", ImageFixtures::png, sizeof (ImageFixtures::png), "png" },
         { "photo.jpeg", ImageFixtures::jpg, sizeof (ImageFixtures::jpg), "jpg" },
         { "anim.gif", ImageFixtures::gif, sizeof (ImageFixtures::gif), "gif" },
+       #if JUCE_MAC   // ImageIO only; the Windows validator uses JUCE's decoders
         { "scan.tif", ImageFixtures::tiff, sizeof (ImageFixtures::tiff), "tiff" },
         { "web.webp", ImageFixtures::webp, sizeof (ImageFixtures::webp), "webp" },
         { "phone.heic", ImageFixtures::heic, sizeof (ImageFixtures::heic), "heic" },
+       #endif
     };
+    const int formatCount = (int) std::size (formats);
     juce::Array<juce::File> batch;
     for (const auto& f : formats)
     {
@@ -682,11 +708,11 @@ void testGalleryStore()
         batch.add (file);
     }
     juce::String error;
-    check (store.importImages (batch, error) == 6 && error.isEmpty(), "all six formats import" + (error.isEmpty() ? juce::String() : " (" + error + ")"));
+    check (store.importImages (batch, error) == formatCount && error.isEmpty(), "all " + juce::String (formatCount) + " formats import" + (error.isEmpty() ? juce::String() : " (" + error + ")"));
     for (const auto& f : formats)
         check (user.getChildFile (juce::String (f.file).upToLastOccurrenceOf (".", false, false) + "." + f.ext).existsAsFile(),
                juce::String (f.file) + " stored as ." + f.ext);
-    check (store.images().size() == 8, "listing merges user and bundled");
+    check (store.images().size() == 2 + formatCount, "listing merges user and bundled");
     auto names = store.images();
     bool sorted = true;
     for (int i = 1; i < names.size(); ++i)
@@ -754,11 +780,13 @@ void testGalleryStore()
     writeBytes (longName, ImageFixtures::png, sizeof (ImageFixtures::png));
     check (store.importImages ({ longName }, error) == 1 && user.getChildFile (juce::String::repeatedString ("a", 60) + ".png").existsAsFile(), "long names are truncated");
 
+   #if ! JUCE_WINDOWS   // creating symlinks on Windows needs admin rights or developer mode
     // symlinked source resolves; directory symlink is not a file
     auto linkToImage = incoming.getChildFile ("link.png");
     ::symlink (good.getFullPathName().toRawUTF8(), linkToImage.getFullPathName().toRawUTF8());
     check (store.importImages ({ linkToImage }, error) == 1 && user.getChildFile ("link.png").existsAsFile()
            && ! user.getChildFile ("link.png").isSymbolicLink(), "symlinked source imports as a real copy");
+   #endif
     check (! hasLeftovers (user), "no temp files left behind");
 
     // removal
@@ -772,6 +800,7 @@ void testGalleryStore()
     check (! store.removeImage (precious) && precious.existsAsFile(), "file outside the folder can't be removed");
     check (! store.removeImage (user.getChildFile ("../outside/precious.png")) && precious.existsAsFile(), "path traversal with .. is refused");
     check (! store.removeImage (juce::File (user.getFullPathName() + "/../outside/precious.png")) && precious.existsAsFile(), "raw .. path is refused");
+   #if ! JUCE_WINDOWS
     ::symlink (outside.getFullPathName().toRawUTF8(), user.getChildFile ("escape").getFullPathName().toRawUTF8());
     check (! store.removeImage (user.getChildFile ("escape/precious.png")) && precious.existsAsFile(), "file reached through a directory symlink is refused");
     check (! store.removeImage (user.getChildFile ("escape")) && outside.isDirectory(), "directory symlink itself is not removable as a picture");
@@ -779,9 +808,11 @@ void testGalleryStore()
     ::symlink (precious.getFullPathName().toRawUTF8(), user.getChildFile ("shortcut.png").getFullPathName().toRawUTF8());
     check (store.removeImage (user.getChildFile ("shortcut.png")) && precious.existsAsFile() && ! user.getChildFile ("shortcut.png").isSymbolicLink(),
            "a symlink inside the folder is removed, its target survives");
+   #endif
     check (! store.removeImage (user) && user.isDirectory() && ! store.removeImage (user.getParentDirectory()), "folders are never removed");
     check (! store.removeImage ({}), "empty path refused");
 
+   #if ! JUCE_WINDOWS
     // store with a symlinked user folder still works
     auto realUser = root.getChildFile ("real-user");
     realUser.createDirectory();
@@ -790,6 +821,7 @@ void testGalleryStore()
     GalleryStore linked (linkedUser, bundled);
     check (linked.importImages ({ good }, error) == 1 && realUser.getChildFile ("good.png").existsAsFile()
            && linked.removeImage (linkedUser.getChildFile ("good.png")), "symlinked gallery folder: import and remove work");
+   #endif
 
     // folder cannot be created
     auto blocker = root.getChildFile ("blocker");
@@ -808,13 +840,19 @@ void testAppPrefs()
     std::printf ("app prefs\n");
     {
         auto data = makeTempDir ("datadir");
-        ::setenv ("OSCILLA_DATA_DIR", data.getFullPathName().toRawUTF8(), 1);
+        setEnvironment ("OSCILLA_DATA_DIR", data.getFullPathName());
         check (AppPrefs::defaultFile() == data.getChildFile ("prefs.json") && ProfileStore::defaultDirectory() == data.getChildFile ("profiles")
                && GalleryStore::defaultUserDirectory() == data.getChildFile ("Gallery"), "OSCILLA_DATA_DIR redirects prefs, profiles and gallery");
-        ::setenv ("OSCILLA_DATA_DIR", "relative/path", 1);
-        check (AppPrefs::defaultFile().getFullPathName().contains ("Application Support/Oscilla"), "relative OSCILLA_DATA_DIR is ignored");
-        ::unsetenv ("OSCILLA_DATA_DIR");
-        check (ProfileStore::defaultDirectory().getFullPathName().endsWith ("Application Support/Oscilla/profiles"), "default location restored");
+        setEnvironment ("OSCILLA_DATA_DIR", "relative/path");
+        check (AppPrefs::defaultFile() == AppPaths::defaultDataDirectory().getChildFile ("prefs.json"), "relative OSCILLA_DATA_DIR is ignored");
+        setEnvironment ("OSCILLA_DATA_DIR", {});
+        check (ProfileStore::defaultDirectory() == AppPaths::defaultDataDirectory().getChildFile ("profiles"), "default location restored");
+       #if JUCE_MAC
+        check (AppPaths::defaultDataDirectory().getFullPathName().endsWith ("Library/Application Support/Oscilla"), "macOS data folder unchanged");
+       #elif JUCE_WINDOWS
+        check (AppPaths::defaultDataDirectory() == juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("OscillaFX"),
+               "Windows data folder is %APPDATA%\\OscillaFX");
+       #endif
         data.deleteRecursively();
     }
     auto dir = makeTempDir ("prefs");

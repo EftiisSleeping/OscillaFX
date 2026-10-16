@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "AppPaths.h"
 #include "audio/DspParams.h"
 #include "DfxDsp.h"
 
@@ -37,7 +38,7 @@ namespace Presets
 juce::Array<juce::File> directories()
 {
     const juce::File candidates[] = {
-        juce::File::getSpecialLocation (juce::File::currentApplicationFile).getChildFile ("Contents/Resources/Presets"),
+        AppPaths::resourcesDirectory().getChildFile ("Presets"),
         sourceTree().getChildFile ("presets"),
         sourceTree().getChildFile ("presets_fxsound"),
     };

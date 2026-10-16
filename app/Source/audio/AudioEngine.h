@@ -6,11 +6,13 @@
 
 struct OutputDevice
 {
-    juce::String uid;  // CoreAudio kAudioDevicePropertyDeviceUID, stable across reconnects
+    juce::String uid;  // stable across reconnects: CoreAudio device UID (macOS), MMDevice endpoint id (Windows)
     juce::String name;
 };
 
-// Captures the "OscillaFX Audio" virtual device, runs DfxDsp, renders to the real output device.
+// Captures the virtual device, runs DfxDsp, renders to the real output device. One implementation per
+// platform: audio/mac/AudioEngine_mac.cpp (CoreAudio, "OscillaFX Audio" HAL driver) and
+// audio/win/AudioEngine_win.cpp (WASAPI, FxSound's signed virtual driver).
 // All public methods are called from the message thread unless noted.
 class AudioEngine
 {

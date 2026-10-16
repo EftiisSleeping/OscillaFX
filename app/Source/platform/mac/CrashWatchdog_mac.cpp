@@ -1,4 +1,4 @@
-#include "CrashWatchdog.h"
+#include "platform/CrashWatchdog.h"
 
 #include <juce_events/juce_events.h>
 #include <crt_externs.h>
@@ -106,27 +106,7 @@ bool spawnHelper()
 }
 } // namespace
 
-juce::File restoreFile()
-{
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("Application Support/Oscilla/restore_output_uid.txt");
-}
-
-bool writeRestoreUid (const juce::String& uid)
-{
-    auto file = restoreFile();
-    return file.getParentDirectory().createDirectory()
-        && file.replaceWithText (juce::String (getpid()) + "\n" + uid + "\n", false, false, "\n"); // helper parses LF
-}
-
-juce::String readRestoreUid()
-{
-    juce::StringArray lines;
-    lines.addLines (restoreFile().loadFileAsString().trim());
-    return lines.isEmpty() ? juce::String() : lines[lines.size() - 1].trim();
-}
-
-void clearRestoreUid() { restoreFile().deleteFile(); }
+int currentProcessId() { return (int) getpid(); }
 
 bool launch()
 {

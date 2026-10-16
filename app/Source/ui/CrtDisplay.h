@@ -9,11 +9,11 @@
 #include <array>
 #include <optional>
 
-class MetalCrtView;
+#include "ui/crt/GpuCrtView.h"
 
 // The CRT: a phosphor visualiser (spectrum / triggered waveform / X-Y), a phosphor picture gallery
 // or, in EQ mode, ten draggable phosphor points for the graphic equaliser. Builds a Crt::Scene
-// each display frame and hands it to the Metal renderer (CPU renderer if Metal is unavailable).
+// each display frame and hands it to the GPU renderer (Metal on macOS; the CPU renderer where there is none or it fails).
 // At power-on the OscillaFX butterfly burns onto the glass during the warm-up, then fades; a silent
 // scope keeps it very dimly lit. Stops rendering once the picture is static, and while the window is hidden or occluded. The GPU
 // renderer is created on first show (never for a window that stays hidden in the menu bar).
@@ -116,8 +116,8 @@ private:
     void setBandGain (int band, float gainDb);
 
     AudioEngine& engine;
-    std::unique_ptr<MetalCrtView> metal;
-    bool hasTriedMetal = false;
+    std::unique_ptr<GpuCrtView> gpu;
+    bool hasTriedGpu = false;
     CpuCrtRenderer cpu;
     juce::VBlankAttachment vblank;
     Crt::Scene scene;

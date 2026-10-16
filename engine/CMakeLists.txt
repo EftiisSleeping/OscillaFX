@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
 project(oscilla_engine C CXX)
 
+# Standalone engine build on Windows (the top-level CMakeLists sets the same): static CRT (/MT)
+# so nothing needs the VC++ redistributable.
+if(MSVC AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_compile_options(/utf-8 /MP)
+    add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -13,7 +21,7 @@ set(OSCILLA_PRESET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../presets_fxsound"
 
 # Legacy DSP: `long` was rewritten to `int` in dsp/ and support/ (Windows long is 32-bit).
 # Do not reintroduce `long` there.
-if(OSCILLA_SANITIZE)
+if(OSCILLA_SANITIZE AND NOT MSVC)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=address,undefined)
 endif()
@@ -114,22 +122,29 @@ set(OSCILLA_DSP_SOURCES
 set(OSCILLA_SUPPORT_SOURCES
     support/src/SLOUT/Slout.cpp
     support/src/MRY/Mry.cpp
-    tests/mac_platform.cpp
+    platform/dsp_platform.cpp
 )
 file(GLOB OSCILLA_MTH_SOURCES support/src/MTH/*.cpp)
 
 add_library(oscilla_dsp STATIC
     ${OSCILLA_DSP_SOURCES} ${OSCILLA_SUPPORT_SOURCES} ${OSCILLA_MTH_SOURCES})
-# Only DfxDsp.h is public. The Windows shim, WIN32 define and legacy headers stay
-# private so consumers (JUCE app) are not compiled as a Windows target.
+# Only DfxDsp.h is public. The WIN32 define, Windows shim and legacy headers stay private so
+# consumers (JUCE app) are not compiled as a Windows target by accident.
 target_include_directories(oscilla_dsp PUBLIC dsp/include)
 target_include_directories(oscilla_dsp PRIVATE
-    shim dsp/ptutil/include support/include dsp dsp/ptutil/dfxp
+    dsp/ptutil/include support/include dsp dsp/ptutil/dfxp
     support/src/SLOUT support/src/MTH support/src/MRY support/src/FILE support/src/reg)
 target_compile_definitions(oscilla_dsp PRIVATE
     WIN32 PT_NON_MFC DSPSOFT_TARGET PT_DSP_BUILD=PT_DSP_DFX)
-target_compile_options(oscilla_dsp PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/windows.h)
-target_compile_options(oscilla_dsp PRIVATE -w)
+if(MSVC)
+    # Native build, as FxSound's DfxDsp.vcxproj (Unicode, real windows.h). No shim.
+    target_compile_definitions(oscilla_dsp PRIVATE UNICODE _UNICODE)
+    target_compile_options(oscilla_dsp PRIVATE /w)
+else()
+    # macOS: shim/ stands in for the Windows SDK headers.
+    target_include_directories(oscilla_dsp PRIVATE shim)
+    target_compile_options(oscilla_dsp PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/windows.h -w)
+endif()
 
 add_executable(dsp_offline tests/dsp_offline.cpp)
 target_link_libraries(dsp_offline PRIVATE oscilla_dsp)
@@ -149,3 +164,11 @@ target_include_directories(preset_tuning PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../
 target_compile_definitions(preset_tuning PRIVATE
     OSCILLA_TUNED_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../presets")
 add_test(NAME preset_tuning COMMAND preset_tuning)
+
+# ../presets/*.fac must be exactly what tools/make_preset.cpp writes.
+add_test(NAME presets_match_make_preset
+    COMMAND ${CMAKE_COMMAND}
+        -DMAKE_PRESET=$<TARGET_FILE:make_preset>
+        -DEXPECTED_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../presets
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/presets_generated
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_presets.cmake)

@@ -1,4 +1,4 @@
-#include "CrashGuard.h"
+#include "platform/mac/CrashGuardMac.h"
 
 #include <atomic>
 #include <csignal>

@@ -17,8 +17,8 @@ enum class DeviceKind
 
 namespace DeviceKinds
 {
-// The CoreAudio facts the classifier looks at. Raw values come from CoreAudioHelpers; tests
-// build them by hand.
+// The device facts the classifier looks at, in CoreAudio terms (other backends map their facts onto
+// these codes or leave them 0 and rely on the name). Tests build them by hand.
 struct Traits
 {
     juce::String uid, name;
@@ -27,7 +27,8 @@ struct Traits
 };
 
 DeviceKind classify (const Traits&);              // pure
-Traits traitsFor (const juce::String& uid, const juce::String& name); // reads CoreAudio; name-only traits if the device is gone
+// Per audio backend (audio/<os>/DeviceTraits_<os>.cpp): reads the OS; name-only traits if the device is gone.
+Traits traitsFor (const juce::String& uid, const juce::String& name);
 
 juce::String id (DeviceKind);     // stable key: "builtin-speakers", "headphones", "usb-headphones", "bluetooth-headphones",
                                   // "airpods", "display", "external-speakers", "unknown"

@@ -4,7 +4,7 @@
 #include "ui/crt/CrtLens.h"
 #include "ui/crt/CrtPalette.h"
 #include "ui/crt/CrtTraces.h"
-#include "ui/crt/MetalCrtView.h"
+#include "ui/crt/GpuCrtView.h"
 
 namespace
 {
@@ -71,7 +71,7 @@ CrtDisplay::CrtDisplay (AudioEngine& e)
 {
     setTitle ("Oscilloscope display");
     setOpaque (true);
-    reducedMotion = MetalCrtView::prefersReducedMotion();
+    reducedMotion = GpuCrtView::prefersReducedMotion();
     gallery.rescan();
 
     for (int i = 0; i < columns; ++i)
@@ -91,22 +91,22 @@ CrtDisplay::~CrtDisplay() = default;
 // touches the GPU.
 void CrtDisplay::ensureRenderer()
 {
-    if (hasTriedMetal || ! isShowing())
+    if (hasTriedGpu || ! isShowing())
         return;
-    hasTriedMetal = true;
-    metal = MetalCrtView::create();
-    if (metal == nullptr)
+    hasTriedGpu = true;
+    gpu = GpuCrtView::create();
+    if (gpu == nullptr)
         return;
-    addAndMakeVisible (*metal, 0);
-    metal->setBounds (getLocalBounds());
+    addAndMakeVisible (*gpu, 0);
+    gpu->setBounds (getLocalBounds());
     wake();
 }
 
 void CrtDisplay::fallBackToCpu()
 {
-    juce::Logger::writeToLog ("CRT (Metal): device lost or failing, switching to the CPU renderer");
-    removeChildComponent (metal.get());
-    metal.reset();
+    juce::Logger::writeToLog ("CRT (GPU): device lost or failing, switching to the CPU renderer");
+    removeChildComponent (gpu.get());
+    gpu.reset();
     renderedPixels = {};
     wake();
     repaint();
@@ -261,8 +261,8 @@ void CrtDisplay::resized()
     scene.graticule = graticule;
     scene.cornerRadius = Theme::Design::glassCorner;
     renderedPixels = {};
-    if (metal != nullptr)
-        metal->setBounds (getLocalBounds());
+    if (gpu != nullptr)
+        gpu->setBounds (getLocalBounds());
     layOutBandAccessors();
     wake();
 }
@@ -282,20 +282,20 @@ void CrtDisplay::setRendersWhenOccluded (bool shouldRender)
 
 juce::Image CrtDisplay::renderedScreen()
 {
-    return metal != nullptr ? metal->capture() : cpu.snapshot();
+    return gpu != nullptr ? gpu->capture() : cpu.snapshot();
 }
 
 //==============================================================================
 void CrtDisplay::tick (double now)
 {
     ensureRenderer();
-    if (metal != nullptr && metal->hasFailed())
+    if (gpu != nullptr && gpu->hasFailed())
         fallBackToCpu();
 
     // Paced to ~60 fps on the GPU (also on 120 Hz displays); 30 fps for the slow-moving gallery
     // and on the CPU fallback.
     const auto isSlowPicture = mode == Mode::gallery && ! isEqEditing;
-    const auto interval = metal != nullptr && ! isSlowPicture ? gpuFrameSeconds : cpuFrameSeconds;
+    const auto interval = gpu != nullptr && ! isSlowPicture ? gpuFrameSeconds : cpuFrameSeconds;
     if (lastFrame > 0.0 && now - lastFrame < interval * 0.8)
         return;
     const auto dt = lastFrame > 0.0 ? juce::jlimit (0.0f, maxFrameSeconds, (float) (now - lastFrame)) : 0.0f;
@@ -304,7 +304,7 @@ void CrtDisplay::tick (double now)
         return;
 
     // the window was rescaled (the panel scales by transform, so resized() is not called)
-    if (metal != nullptr && metal->drawableSize() != renderedPixels)
+    if (gpu != nullptr && gpu->drawableSize() != renderedPixels)
         wake();
 
     clock += dt;
@@ -320,9 +320,9 @@ void CrtDisplay::tick (double now)
         return;
 
     buildScene (dt);
-    if (metal != nullptr)
+    if (gpu != nullptr)
     {
-        metal->render (scene);
+        gpu->render (scene);
         return;
     }
     cpu.render (scene);
@@ -331,7 +331,7 @@ void CrtDisplay::tick (double now)
 
 bool CrtDisplay::isOnScreen() const
 {
-    return isShowing() && (metal == nullptr || rendersWhenOccluded || metal->isVisibleOnScreen());
+    return isShowing() && (gpu == nullptr || rendersWhenOccluded || gpu->isVisibleOnScreen());
 }
 
 bool CrtDisplay::isStatic() const
@@ -440,7 +440,7 @@ void CrtDisplay::buildScene (float dt)
     }
     updateOverlay();
     updateHint (dt);
-    renderedPixels = metal != nullptr ? metal->drawableSize() : juce::Point<int>();
+    renderedPixels = gpu != nullptr ? gpu->drawableSize() : juce::Point<int>();
 }
 
 void CrtDisplay::addSpectrum()
@@ -684,8 +684,8 @@ std::vector<Crt::Artwork::Label> CrtDisplay::currentLabels() const
 
 juce::Point<int> CrtDisplay::overlayPixels() const
 {
-    if (metal != nullptr)
-        return metal->drawableSize();
+    if (gpu != nullptr)
+        return gpu->drawableSize();
     return { getWidth() * 2, getHeight() * 2 };
 }
 
@@ -751,9 +751,9 @@ void CrtDisplay::updateHint (float dt)
 //==============================================================================
 void CrtDisplay::paint (juce::Graphics& g)
 {
-    if (metal != nullptr)
+    if (gpu != nullptr)
     {
-        g.fillAll (juce::Colours::black);   // covered by the Metal layer
+        g.fillAll (juce::Colours::black);   // covered by the GPU view
         return;
     }
     cpu.paint (g, scene);
@@ -778,7 +778,7 @@ int CrtDisplay::highlightedBand() const
 juce::Point<float> CrtDisplay::toPhosphor (juce::Point<float> screenPosition) const
 {
     // The GPU tube face is curved; map through the same lens as the shader (exact, see CrtLens.h).
-    return metal != nullptr ? Crt::Lens::toPhosphor (screenPosition, getLocalBounds().toFloat()) : screenPosition;
+    return gpu != nullptr ? Crt::Lens::toPhosphor (screenPosition, getLocalBounds().toFloat()) : screenPosition;
 }
 
 int CrtDisplay::bandAt (float x) const

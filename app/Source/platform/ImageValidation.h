@@ -2,8 +2,9 @@
 
 #include <juce_core/juce_core.h>
 
-// Decides from the file's bytes (ImageIO sniffing, never the extension) whether a file is a picture
-// the gallery can show. Thread-safe.
+// Decides from the file's bytes (never the extension) whether a file is a picture the gallery can
+// show. Thread-safe. macOS sniffs with ImageIO (jpg png webp heic gif tiff); Windows decodes with
+// JUCE (jpg png gif only).
 namespace ImageValidation
 {
 struct Result

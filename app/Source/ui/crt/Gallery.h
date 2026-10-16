@@ -6,10 +6,11 @@
 #include <set>
 
 // Pictures for the phosphor gallery. Sources, merged and sorted by file name:
-//   $OSCILLA_GALLERY_DIR (if set, used alone), ~/Library/Application Support/Oscilla/Gallery,
-//   Oscilla.app/Contents/Resources/Gallery; when those hold nothing, <repo>/assets/gallery (dev).
-// Any format ImageIO reads (png / jpg / webp / heic ...; JUCE cannot read webp) is decoded on a
-// background thread straight to a <= 512 px thumbnail, converted to luminance and auto-levelled.
+//   $OSCILLA_GALLERY_DIR (if set, used alone), GalleryStore::defaultUserDirectory(),
+//   AppPaths::resourcesDirectory()/Gallery; when those hold nothing, <repo>/assets/gallery (dev).
+// Pictures are decoded on a background thread straight to a <= 512 px thumbnail, converted to
+// luminance and auto-levelled. macOS decodes anything ImageIO reads (png / jpg / webp / heic ...);
+// Windows decodes what JUCE reads (png / jpg / gif).
 // Message thread only, apart from the internal decoder.
 namespace Crt
 {
@@ -46,7 +47,7 @@ namespace Crt
         int nextId = 1;
     };
 
-    // Implemented in Gallery.mm: decodes any image ImageIO understands into luminance, as a
+    // Per platform (ui/crt/<os>/GalleryDecode_<os>): decodes a picture into luminance, as a
     // thumbnail whose longer side is at most maxSide pixels. Thread-safe.
     LuminanceImage decodeLuminance (const juce::File&, int maxSide);
 }

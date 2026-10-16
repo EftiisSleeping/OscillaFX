@@ -1,5 +1,5 @@
-#include "ui/crt/MetalCrtView.h"
-#include "ui/crt/CrtShaders.h"
+#include "ui/crt/mac/MetalCrtView.h"
+#include "ui/crt/mac/CrtShaders.h"
 
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>

@@ -1,4 +1,4 @@
-#include "ImageValidation.h"
+#include "platform/ImageValidation.h"
 
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>

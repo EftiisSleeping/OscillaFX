@@ -1,5 +1,4 @@
 #include "DeviceKind.h"
-#include "audio/CoreAudioHelpers.h"
 
 namespace
 {
@@ -116,19 +115,6 @@ DeviceKind classify (const Traits& t)
     if (nameSaysSpeakers (t.name))
         return DeviceKind::externalSpeakers;
     return DeviceKind::unknown;
-}
-
-Traits traitsFor (const juce::String& uid, const juce::String& name)
-{
-    Traits traits { uid, name, 0, 0 };
-    if (auto device = CoreAudioHelpers::findDeviceByUid (uid); device != kAudioObjectUnknown)
-    {
-        traits.transport = CoreAudioHelpers::transportType (device);
-        traits.dataSource = CoreAudioHelpers::outputDataSource (device);
-        if (traits.name.isEmpty())
-            traits.name = CoreAudioHelpers::deviceName (device);
-    }
-    return traits;
 }
 
 juce::String id (DeviceKind kind)
