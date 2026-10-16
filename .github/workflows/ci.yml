@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake -S . -B build-mac -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+      - name: Build
+        run: cmake --build build-mac -j "$(sysctl -n hw.ncpu)"
+      - name: Engine tests (run_tests.sh)
+        run: ./engine/run_tests.sh -DCMAKE_OSX_ARCHITECTURES=arm64
+      - name: ctest
+        run: ctest --test-dir build-mac --output-on-failure
+      - name: Watchdog tests
+        run: bash helper/test_watchdog.sh build-mac/helper/OscillaWatchdog
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake -S . -B build-win -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build build-win --config Release --parallel
+      - name: ctest
+        run: ctest --test-dir build-win -C Release --output-on-failure
+      - name: Upload OscillaFX.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: OscillaFX-windows-x64
+          path: build-win/OscillaFX_artefacts/Release/
+          if-no-files-found: error
