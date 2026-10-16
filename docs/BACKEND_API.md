@@ -47,7 +47,7 @@ int  importGalleryImages (const juce::Array<juce::File>&, juce::String& error);
 bool removeGalleryImage (const juce::File&);
 ```
 
-- `galleryImages()`: user folder `~/Library/Application Support/Oscilla/Gallery` plus bundled `Contents/Resources/Gallery`, sorted by file name (natural). Same set `ui/crt/Gallery.mm` scans. Re-lists on every call.
+- `galleryImages()`: user folder `~/Library/Application Support/Oscilla/Gallery` plus bundled `Contents/Resources/Gallery`, sorted by file name (natural). Same set `ui/crt/Gallery.cpp` scans. Re-lists on every call.
 - `importGalleryImages(files, error)`: copies jpg / png / webp / heic / gif (first frame is shown) / tiff into the user folder. Validated by content (ImageIO), not extension; max 50 MB each; stored under a sanitised unique name (`name.png`, `name-2.png`, ...) with the extension the content really has. **Returns the number imported** (0 = none), not a bool; `error` holds one line per rejected file, empty when all went in. Fires a change message if anything was imported.
 - `removeGalleryImage(file)`: deletes only a picture directly inside the user folder (`..` and symlinks resolved). Bundled pictures and anything else: `false`, untouched. Fires a change message on success.
 
