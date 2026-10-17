@@ -776,7 +776,7 @@ void testGalleryStore()
     }
     check (safeNames && user.getChildFile ("weird namex.png").existsAsFile() && user.getChildFile ("hidden.png").existsAsFile()
            && user.getChildFile ("image.png").existsAsFile(), "stored names are sanitised, never dotfiles, never empty");
-    auto longName = incoming.getChildFile (juce::String::repeatedString ("a", 200) + ".png");
+    auto longName = incoming.getChildFile (juce::String::repeatedString ("a", 150) + ".png");   // keeps the path under Windows MAX_PATH
     writeBytes (longName, ImageFixtures::png, sizeof (ImageFixtures::png));
     check (store.importImages ({ longName }, error) == 1 && user.getChildFile (juce::String::repeatedString ("a", 60) + ".png").existsAsFile(), "long names are truncated");
 
