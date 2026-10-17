@@ -52,9 +52,14 @@ not_my_parent_case() {
 initial_default="$(default_output)"
 
 OSCILLA_WATCHDOG_DRYRUN_DEFAULT_UID=Oscilla_UID \
-    crash_case "crash restores saved device" "would set default output to $SAVED_UID" $'%PID%\n'"$SAVED_UID"$'\n'
-OSCILLA_WATCHDOG_DRYRUN_DEFAULT_UID=Oscilla_UID \
     crash_case "saved device gone -> other real output" "would set default output to" $'%PID%\nNo_Such_Device_UID\n'
+# Machines without built-in speakers (CI VMs): use the real output the fallback just picked.
+fallback_uid="$(grep -o 'would set default output to [^ ]*' "$LOG" | tail -1 | awk '{print $NF}')"
+if ! system_profiler SPAudioDataType | grep -q "Speakers:" && [ -n "$fallback_uid" ]; then
+    SAVED_UID="$fallback_uid"
+fi
+OSCILLA_WATCHDOG_DRYRUN_DEFAULT_UID=Oscilla_UID \
+    crash_case "crash restores saved device" "would set default output to $SAVED_UID " $'%PID%\n'"$SAVED_UID"$'\n'
 # Pretend the default is a real device: hermetic even while OscillaFX itself runs and owns the real default.
 OSCILLA_WATCHDOG_DRYRUN_DEFAULT_UID="$SAVED_UID" \
     crash_case "default not the virtual device -> untouched" "not the virtual device; nothing to do" $'%PID%\n'"$SAVED_UID"$'\n'
