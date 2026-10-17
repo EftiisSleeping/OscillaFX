@@ -42,7 +42,11 @@ void TrayIcon::refreshIcon()
 void TrayIcon::mouseDown (const juce::MouseEvent&)
 {
     refreshIcon();
+   #if JUCE_MAC
     showDropdownMenu (buildMenu());
+   #else
+    buildMenu().showMenuAsync (juce::PopupMenu::Options().withMousePosition());
+   #endif
 }
 
 juce::PopupMenu TrayIcon::buildMenu()

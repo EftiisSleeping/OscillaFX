@@ -148,7 +148,7 @@ void testRingBufferThreaded()
 {
     std::printf ("spsc ring\n");
     SpscRingBuffer ring (1024);
-    constexpr int TOTAL = 2'000'000;
+    static constexpr int TOTAL = 2'000'000;   // static: MSVC will not use an uncaptured local in the lambdas
     std::thread producer ([&ring]
     {
         std::mt19937 rng (1);
