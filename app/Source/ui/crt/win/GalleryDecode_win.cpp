@@ -11,8 +11,8 @@ LuminanceImage decodeWithJuce (const juce::File& file, int maxSide)
 {
     LuminanceImage result;
     juce::FileInputStream stream (file);
-    const auto pixels = stream.openedOk() ? ImageHeader::pixelCount (stream) : -1;
-    if (pixels <= 0 || pixels > ImageHeader::MAX_PIXELS)
+    const auto pixelCount = stream.openedOk() ? ImageHeader::pixelCount (stream) : -1;
+    if (pixelCount <= 0 || pixelCount > ImageHeader::MAX_PIXELS)
         return result;
     auto image = juce::ImageFileFormat::loadFrom (stream);
     if (! image.isValid())
