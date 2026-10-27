@@ -97,6 +97,7 @@ const
   ROOT_MEDIA_DEVICES = 'SYSTEM\CurrentControlSet\Enum\ROOT\MEDIA';
   UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
   RUN_KEY = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  STARTUP_APPROVED_KEY = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
   QUIT_TIMEOUT_MS = 4000;
 
 var
@@ -326,6 +327,7 @@ begin
                   mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES);
         QuitOscillaFX;
         RegDeleteValue(HKCU, RUN_KEY, 'OscillaFX');
+        RegDeleteValue(HKCU, STARTUP_APPROVED_KEY, 'OscillaFX'); { Task Manager's enabled/disabled flag }
         RemoveDriver;
       end;
     usPostUninstall:
