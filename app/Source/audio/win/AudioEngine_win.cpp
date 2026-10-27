@@ -229,7 +229,11 @@ struct AudioEngine::Impl
             return failAndRestore (error);
         }
         SystemEndpoints endpoints (*enumerator.Get());
-        takeover.begin (endpoints, virtualId);
+        if (! takeover.begin (endpoints, virtualId))
+        {
+            stop();
+            return fail ("Could not make \"FxSound Audio Enhancer\" the default playback device.");
+        }
         registerDeviceNotifications();
         captureWatch.startTimer (CAPTURE_START_TIMEOUT_MS);
         healthCheck.startTimer (HEALTH_POLL_MS);
@@ -674,7 +678,7 @@ struct AudioEngine::Impl
 
     void captureLoop()
     {
-        MM::ComScope com (COINIT_MULTITHREADED);
+        MM::ComScope threadCom (COINIT_MULTITHREADED);
         ProAudioPriority priority;
         const HANDLE events[] = { stopEvent.get(), captureEvent.get() };
         while (WaitForMultipleObjects (2, events, FALSE, CAPTURE_WAIT_MS) != WAIT_OBJECT_0)
@@ -753,7 +757,7 @@ struct AudioEngine::Impl
 
     void renderLoop()
     {
-        MM::ComScope com (COINIT_MULTITHREADED);
+        MM::ComScope threadCom (COINIT_MULTITHREADED);
         ProAudioPriority priority;
         const HANDLE events[] = { stopEvent.get(), renderEvent.get() };
         const auto idleLimit = (UINT64) (IDLE_PAUSE_SECONDS * renderFormat.sampleRate);
