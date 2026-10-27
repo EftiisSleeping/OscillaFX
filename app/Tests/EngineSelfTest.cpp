@@ -30,6 +30,9 @@
  #include <unistd.h>
 #endif
 #if JUCE_WINDOWS
+ #include "platform/LoginItem.h"
+ #include "platform/win/WicImage.h"
+ #include <juce_graphics/juce_graphics.h>
  #include <stdlib.h>
 #endif
 
@@ -693,8 +696,8 @@ void testGalleryStore()
         { "photo.png", ImageFixtures::png, sizeof (ImageFixtures::png), "png" },
         { "photo.jpeg", ImageFixtures::jpg, sizeof (ImageFixtures::jpg), "jpg" },
         { "anim.gif", ImageFixtures::gif, sizeof (ImageFixtures::gif), "gif" },
-       #if JUCE_MAC   // ImageIO only; the Windows validator uses JUCE's decoders
         { "scan.tif", ImageFixtures::tiff, sizeof (ImageFixtures::tiff), "tiff" },
+       #if JUCE_MAC   // Windows: only with the Store codecs, checked in testWindowsImageCodecs()
         { "web.webp", ImageFixtures::webp, sizeof (ImageFixtures::webp), "webp" },
         { "phone.heic", ImageFixtures::heic, sizeof (ImageFixtures::heic), "heic" },
        #endif
@@ -1397,6 +1400,88 @@ void testControllerApi()
 }
 } // namespace
 
+#if JUCE_WINDOWS
+// WebP / HEIC need the Microsoft Store codecs: with them they import, without them the user is told
+// which extension to install.
+void testWindowsImageCodecs()
+{
+    std::printf ("windows image codecs\n");
+    auto dir = makeTempDir ("wic");
+    auto user = dir.getChildFile ("user");
+    GalleryStore store (user, dir.getChildFile ("bundled"));
+    struct Optional { const char* file; const unsigned char* bytes; size_t size; const char* ext; const char* store; };
+    const Optional optional[] = {
+        { "web.webp", ImageFixtures::webp, sizeof (ImageFixtures::webp), "webp", "Webp Image Extensions" },
+        { "phone.heic", ImageFixtures::heic, sizeof (ImageFixtures::heic), "heic", "HEVC Video Extensions" },
+    };
+    for (const auto& f : optional)
+    {
+        auto file = dir.getChildFile (f.file);
+        writeBytes (file, f.bytes, f.size);
+        juce::String error;
+        const auto decodable = WicImage::decodeGrey (file, 32).isValid();
+        const auto imported = store.importImages ({ file }, error);
+        std::printf ("  %s: codec %s, decodable %d\n", f.ext, WicImage::hasCodec (f.ext) ? "present" : "missing", (int) decodable);
+        if (decodable)
+            check (imported == 1 && user.getChildFile (juce::String (f.file).upToLastOccurrenceOf (".", false, false) + "." + f.ext).existsAsFile(),
+                   juce::String (f.ext) + " decodable: imports" + (error.isEmpty() ? juce::String() : " (" + error + ")"));
+        else
+            check (imported == 0 && error.contains (f.store), juce::String (f.ext) + " not decodable: rejected, names the Store extension (" + error + ")");
+    }
+    dir.deleteRecursively();
+}
+
+// WIC thumbnail decode used by the CRT gallery: longest side capped, luminance times alpha.
+void testWicThumbnail()
+{
+    std::printf ("wic thumbnail\n");
+    auto dir = makeTempDir ("wicthumb");
+    juce::Image image (juce::Image::ARGB, 1200, 600, true);   // left half transparent, right half white
+    image.clear ({ 600, 0, 600, 600 }, juce::Colours::white);
+    auto png = dir.getChildFile ("half.png");
+    {
+        juce::FileOutputStream out (png);
+        juce::PNGImageFormat().writeImageToStream (image, out);
+    }
+    const auto grey = WicImage::decodeGrey (png, 512);
+    check (grey.width == 512 && grey.height == 256, "1200x600 decodes to 512x256 (" + juce::String (grey.width) + "x" + juce::String (grey.height) + ")");
+    if (grey.isValid())
+        check (grey.pixels[(size_t) (128 * grey.width + 64)] == 0 && grey.pixels[(size_t) (128 * grey.width + 448)] == 255,
+               "transparent -> 0, white -> 255");
+    const auto small = WicImage::decodeGrey (png, 4096);
+    check (small.width == 1200 && small.height == 600, "never enlarged");
+    auto text = dir.getChildFile ("text.png");
+    text.replaceWithText ("not an image");
+    check (! WicImage::decodeGrey (text, 512).isValid() && ! WicImage::probe (text).isDecodable, "text file is not decodable");
+    const auto tiff = dir.getChildFile ("scan.tif");
+    writeBytes (tiff, ImageFixtures::tiff, sizeof (ImageFixtures::tiff));
+    const auto info = WicImage::probe (tiff);
+    check (info.isDecodable && info.extension == "tiff" && info.width == 8 && info.height == 8, "TIFF probed as 8x8 tiff");
+    dir.deleteRecursively();
+}
+
+// HKCU Run entry round trip. Restores whatever was registered before (a developer's own install).
+void testLoginItem()
+{
+    std::printf ("login item\n");
+    const juce::String runValue ("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\OscillaFX");
+    const auto hadValue = juce::WindowsRegistry::valueExists (runValue);
+    const auto previous = juce::WindowsRegistry::getValue (runValue);
+
+    check (LoginItem::setEnabled (true) && LoginItem::isEnabled(), "register: enabled");
+    const auto command = juce::WindowsRegistry::getValue (runValue);
+    const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+    check (command == exe.quoted() + " --launched-at-login", "Run value is \"<exe>\" --launched-at-login (" + command + ")");
+    juce::WindowsRegistry::setValue (runValue, juce::String ("\"C:\\Elsewhere\\OscillaFX.exe\" --launched-at-login"));
+    check (! LoginItem::isEnabled(), "entry of another copy counts as off");
+    check (LoginItem::setEnabled (false) && ! LoginItem::isEnabled() && ! juce::WindowsRegistry::valueExists (runValue), "unregister removes the value");
+    check (LoginItem::setEnabled (false), "unregister twice is fine");
+
+    if (hadValue)
+        juce::WindowsRegistry::setValue (runValue, previous);
+}
+#endif
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -1418,6 +1503,11 @@ int main()
     testSafetySettings();
     testDynamics();
     testControllerApi();
+   #if JUCE_WINDOWS
+    testWindowsImageCodecs();
+    testWicThumbnail();
+    testLoginItem();
+   #endif
     std::printf (failures ? "FAILED: %d\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;
 }
