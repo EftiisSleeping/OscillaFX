@@ -30,6 +30,9 @@
  #include <unistd.h>
 #endif
 #if JUCE_WINDOWS
+ #include "audio/win/DefaultRoles.h"
+ #include "audio/win/EndpointTraits.h"
+ #include "audio/win/WasapiFormat.h"
  #include <stdlib.h>
 #endif
 
@@ -1264,6 +1267,217 @@ void testDynamics()
     }
 }
 
+// ---- Windows audio backend: format conversion, channel maps, endpoint classifier, default roles
+
+#if JUCE_WINDOWS
+void testWasapiFormat()
+{
+    std::printf ("wasapi formats\n");
+    using namespace WasapiFormat;
+    check (describe (true, false, 32, 2, 48000, 3).type == SampleType::float32, "float32 recognised");
+    check (describe (false, true, 16, 2, 44100, 0).type == SampleType::int16, "int16 recognised");
+    check (describe (false, true, 24, 2, 48000, 0).type == SampleType::int24 && describe (false, true, 24, 2, 48000, 0).bytesPerFrame() == 6,
+           "packed int24, 6 bytes per stereo frame");
+    check (describe (false, true, 32, 8, 96000, 0x63f).type == SampleType::int32, "int32 / 24-in-32 recognised");
+    check (describe (false, true, 8, 2, 48000, 0).type == SampleType::unsupported && ! describe (false, true, 8, 2, 48000, 0).isUsable(),
+           "8-bit rejected");
+
+    uint8_t bytes[4] {};
+    writeSample (bytes, SampleType::int16, 0.5f);
+    check (near (readSample (bytes, SampleType::int16), 0.5, 1.0 / 32768), "int16 round trip");
+    writeSample (bytes, SampleType::int16, 2.0f);
+    check (bytes[0] == 0xff && bytes[1] == 0x7f, "int16 clamps at +32767");
+    writeSample (bytes, SampleType::int24, -1.0f);
+    check (near (readSample (bytes, SampleType::int24), -1.0, 1.0 / 8388608) && bytes[2] == 0x80, "int24 negative full scale, sign extended");
+    writeSample (bytes, SampleType::int24, 0.25f);
+    check (near (readSample (bytes, SampleType::int24), 0.25, 1.0 / 8388608), "int24 round trip");
+    writeSample (bytes, SampleType::int32, 1.0f);
+    check (near (readSample (bytes, SampleType::int32), 1.0, 1e-6), "int32 full scale");
+    writeSample (bytes, SampleType::float32, -0.75f);
+    check (near (readSample (bytes, SampleType::float32), -0.75, 0), "float32 copied bit-exact");
+}
+
+void testStereoMaps()
+{
+    std::printf ("wasapi channel maps\n");
+    using namespace WasapiFormat;
+    const auto mono = stereoMapFor (1, 0x4);
+    check (mono.mono && mono.left == 0 && mono.right == 0, "mono endpoint");
+    const auto stereo = stereoMapFor (2, 0x3);
+    check (! stereo.mono && stereo.left == 0 && stereo.right == 1 && stereo.rearLeft < 0, "stereo");
+    const auto surround51 = stereoMapFor (6, 0x3f);
+    check (surround51.left == 0 && surround51.right == 1 && surround51.rearLeft < 0 && surround51.rearRight < 0, "5.1: front pair only");
+    const auto surround71 = stereoMapFor (8, 0x63f);
+    check (surround71.left == 0 && surround71.right == 1, "7.1: front pair");
+    const auto quad = stereoMapFor (4, 0x33);
+    check (quad.left == 0 && quad.right == 1 && quad.rearLeft == 2 && quad.rearRight == 3, "quad: copied to the back pair");
+    const auto quadNoMask = stereoMapFor (4, 0);
+    check (quadNoMask.rearLeft == 2 && quadNoMask.rearRight == 3, "quad without mask");
+    const auto noFront = stereoMapFor (2, 0x30);
+    check (noFront.left == 0 && noFront.right == 1, "mask without front pair falls back to 0 / 1");
+    const auto noLeft = stereoMapFor (3, 0x2 | 0x4 | 0x8);
+    check (noLeft.left == 0 && noLeft.right == 1, "mask without front left: 0 / 1, never the same channel twice");
+
+    // stereo -> 5.1 int16: only FL / FR carry signal
+    const float stereoIn[] = { 0.5f, -0.5f, 0.25f, -0.25f };
+    const auto six = describe (false, true, 16, 6, 48000, 0x3f);
+    int16_t out6[12];
+    std::fill (std::begin (out6), std::end (out6), (int16_t) 1234);
+    fromStereo (stereoIn, six, surround51, reinterpret_cast<uint8_t*> (out6), 2);
+    bool othersSilent = true;
+    for (int frame = 0; frame < 2; ++frame)
+        for (int ch = 2; ch < 6; ++ch)
+            othersSilent &= out6[frame * 6 + ch] == 0;
+    check (out6[0] == 16384 && out6[1] == -16384 && out6[6] == 8192 && othersSilent, "stereo -> 5.1 int16: front pair, rest silent");
+
+    const auto monoFloat = describe (true, false, 32, 1, 48000, 0);
+    float outMono[2];
+    fromStereo (stereoIn, monoFloat, mono, reinterpret_cast<uint8_t*> (outMono), 2);
+    check (near (outMono[0], 0, 0) && near (outMono[1], 0, 0), "mono gets (L + R) / 2");
+
+    const auto quadFloat = describe (true, false, 32, 4, 48000, 0x33);
+    float outQuad[8];
+    fromStereo (stereoIn, quadFloat, quad, reinterpret_cast<uint8_t*> (outQuad), 2);
+    check (near (outQuad[2], 0.5, 0) && near (outQuad[3], -0.5, 0) && near (outQuad[6], 0.25, 0), "quad back pair mirrors the front");
+
+    // 5.1 float capture -> stereo picks FL / FR, mono capture is duplicated
+    const float six51[] = { 0.1f, 0.2f, 0.9f, 0.9f, 0.9f, 0.9f, 0.3f, 0.4f, 0.9f, 0.9f, 0.9f, 0.9f };
+    float captured[4];
+    toStereo (reinterpret_cast<const uint8_t*> (six51), describe (true, false, 32, 6, 48000, 0x3f), surround51, captured, 2);
+    check (near (captured[0], 0.1f, 0) && near (captured[1], 0.2f, 0) && near (captured[2], 0.3f, 0) && near (captured[3], 0.4f, 0),
+           "5.1 capture -> front pair");
+    const int16_t monoIn[] = { 16384, -8192 };
+    toStereo (reinterpret_cast<const uint8_t*> (monoIn), describe (false, true, 16, 1, 48000, 0), mono, captured, 2);
+    check (near (captured[0], 0.5, 0) && near (captured[1], 0.5, 0) && near (captured[2], -0.25, 0) && near (captured[3], -0.25, 0),
+           "mono capture duplicated");
+}
+
+void testEndpointTraits()
+{
+    std::printf ("windows endpoint classifier\n");
+    using namespace EndpointTraits;
+    struct Case
+    {
+        const char* label; const char* name; const char* adapter; const char* enumerator;
+        int formFactor; bool battery; DeviceKind expected;
+    };
+    const Case cases[] = {
+        { "laptop speakers",        "Speakers (Realtek(R) Audio)",           "Realtek(R) Audio",      "HDAUDIO",    speakers,   true,  DeviceKind::builtInSpeakers },
+        { "SST laptop speakers",    "Speakers (Intel Smart Sound)",          "Intel Smart Sound",     "INTELAUDIO", speakers,   true,  DeviceKind::builtInSpeakers },
+        { "desktop rear jack",      "Speakers (Realtek(R) Audio)",           "Realtek(R) Audio",      "HDAUDIO",    speakers,   false, DeviceKind::externalSpeakers },
+        { "headphone jack",         "Headphones (Realtek(R) Audio)",         "Realtek(R) Audio",      "HDAUDIO",    headphones, true,  DeviceKind::headphonesWired },
+        { "combo jack headset",     "Headset (Realtek(R) Audio)",            "Realtek(R) Audio",      "HDAUDIO",    headset,    true,  DeviceKind::headphonesWired },
+        { "S/PDIF out",             "Realtek Digital Output (Realtek(R) Audio)", "Realtek(R) Audio",  "HDAUDIO",    spdif,      false, DeviceKind::externalSpeakers },
+        { "line out",               "Line (Realtek(R) Audio)",               "Realtek(R) Audio",      "HDAUDIO",    lineLevel,  false, DeviceKind::externalSpeakers },
+        { "HDMI monitor",           "LG ULTRAGEAR (NVIDIA High Definition Audio)", "NVIDIA High Definition Audio", "HDAUDIO", digitalAudioDisplayDevice, false, DeviceKind::display },
+        { "BT headphones",          "Headphones (WH-1000XM5)",               "WH-1000XM5",            "BTHENUM",    headphones, true,  DeviceKind::headphonesBluetooth },
+        { "AirPods A2DP",           "Headphones (Efti's AirPods Pro)",       "Efti's AirPods Pro",    "BTHENUM",    headphones, true,  DeviceKind::airPods },
+        { "AirPods hands-free",     "Headset (AirPods Pro Hands-Free AG Audio)", "AirPods Pro Hands-Free AG Audio", "BTHHFENUM", headset, true, DeviceKind::airPods },
+        { "BT speaker",             "Speakers (JBL Flip 6)",                 "JBL Flip 6",            "BTHENUM",    speakers,   true,  DeviceKind::externalSpeakers },
+        { "USB headset as speakers","Speakers (Logitech G Pro X)",           "Logitech G Pro X",      "USB",        speakers,   true,  DeviceKind::headphonesUsb },
+        { "USB headset",            "Headset Earphone (HyperX Cloud)",       "HyperX Cloud",          "USB",        headset,    true,  DeviceKind::headphonesUsb },
+        { "USB display",            "Speakers (Studio Display)",             "Studio Display",        "USB",        speakers,   false, DeviceKind::display },
+        { "USB monitors",           "Speakers (KRK Monitor Interface)",      "KRK Monitor Interface", "USB",        speakers,   false, DeviceKind::externalSpeakers },
+        { "USB DAC",                "Speakers (USB Audio DAC)",              "USB Audio DAC",         "USB",        speakers,   true,  DeviceKind::headphonesUsb },
+        { "virtual cable",          "CABLE Input (VB-Audio Virtual Cable)",  "VB-Audio Virtual Cable","ROOT",       speakers,   true,  DeviceKind::unknown },
+        { "unknown bus, AirPods",   "AirPods Pro",                           "",                      "",           -1,         true,  DeviceKind::airPods },
+    };
+    for (const auto& c : cases)
+    {
+        Facts facts;
+        facts.uid = "{0.0.0.00000000}.{test}";
+        facts.name = c.name;
+        facts.adapterName = c.adapter;
+        facts.enumerator = c.enumerator;
+        facts.formFactor = c.formFactor;
+        facts.hasSystemBattery = c.battery;
+        const auto got = DeviceKinds::classify (traitsFor (facts));
+        check (got == c.expected, juce::String (c.label) + " -> " + DeviceKinds::id (c.expected)
+                                      + (got == c.expected ? "" : " (got " + DeviceKinds::id (got) + ")"));
+    }
+}
+
+struct FakeEndpoints : DefaultRoles::Endpoints
+{
+    std::array<juce::String, DefaultRoles::numRoles> defaults;
+    juce::StringArray active { "spk", "hp", "headset", "fx" };
+
+    juce::String defaultFor (DefaultRoles::Role role) const override { return defaults[(size_t) role]; }
+    bool setDefault (const juce::String& id, DefaultRoles::Role role) override { defaults[(size_t) role] = id; return true; }
+    bool isActive (const juce::String& id) const override { return active.contains (id); }
+
+    bool all (const juce::String& id) const { return defaults[0] == id && defaults[1] == id && defaults[2] == id; }
+};
+
+void testDefaultRoles()
+{
+    std::printf ("default playback roles\n");
+    using namespace DefaultRoles;
+    {
+        FakeEndpoints endpoints;
+        endpoints.defaults = { "spk", "spk", "spk" };
+        Takeover takeover;
+        check (takeover.begin (endpoints, "fx") && endpoints.all ("fx"), "single-device setup: every role moves to the virtual endpoint");
+        check (takeover.original (console) == "spk" && takeover.holds (communications), "originals remembered");
+        takeover.restore (endpoints, "hp");
+        check (endpoints.all ("hp") && ! takeover.isActive(), "stop: every role goes to the output being heard");
+    }
+    {
+        FakeEndpoints endpoints;
+        endpoints.defaults = { "spk", "spk", "headset" };
+        Takeover takeover;
+        takeover.begin (endpoints, "fx");
+        check (endpoints.defaults[0] == "fx" && endpoints.defaults[1] == "fx" && endpoints.defaults[2] == "headset",
+               "separate call headset left alone");
+        takeover.restore (endpoints, "spk");
+        check (endpoints.defaults[0] == "spk" && endpoints.defaults[1] == "spk" && endpoints.defaults[2] == "headset", "restore keeps the headset");
+    }
+    {
+        FakeEndpoints endpoints;
+        endpoints.defaults = { "spk", "spk", "spk" };
+        Takeover takeover;
+        takeover.begin (endpoints, "fx");
+        endpoints.defaults[0] = "hp";
+        takeover.userChose (endpoints, console, "fx");
+        check (endpoints.defaults[0] == "fx" && takeover.holds (console), "user picks a device: console pointed back at the virtual endpoint");
+        endpoints.defaults[2] = "headset";
+        takeover.userChose (endpoints, communications, "fx");
+        check (endpoints.defaults[2] == "headset" && ! takeover.holds (communications), "user moves communications: given up");
+        takeover.restore (endpoints, "hp");
+        check (endpoints.defaults[0] == "hp" && endpoints.defaults[1] == "hp" && endpoints.defaults[2] == "headset", "restore skips released role");
+    }
+    {
+        FakeEndpoints endpoints;
+        endpoints.defaults = { "spk", "spk", "spk" };
+        Takeover takeover;
+        takeover.begin (endpoints, "fx");
+        endpoints.active.removeString ("hp");
+        takeover.restore (endpoints, "hp");
+        check (endpoints.all ("spk"), "output gone: original endpoints restored");
+    }
+    {
+        FakeEndpoints endpoints;
+        endpoints.defaults = { "fx", "fx", "fx" };   // left behind by a crash
+        Takeover takeover;
+        takeover.begin (endpoints, "fx");
+        check (takeover.original (console).isEmpty() && takeover.holds (communications), "virtual endpoint is never remembered as original");
+        takeover.restore (endpoints, "spk");
+        check (endpoints.all ("spk"), "after a crash: restored to the output");
+    }
+    {
+        FakeEndpoints endpoints;
+        endpoints.defaults = { "spk", "spk", "spk" };
+        Takeover takeover;
+        takeover.begin (endpoints, "fx");
+        takeover.begin (endpoints, "fx");
+        check (takeover.original (console) == "spk", "begin again keeps the first originals");
+        endpoints.defaults[1] = "hp";   // moved by another app meanwhile
+        takeover.restore (endpoints, "spk");
+        check (endpoints.defaults[1] == "hp" && endpoints.defaults[0] == "spk", "role changed by someone else is left alone");
+    }
+}
+#endif
+
 // ---- Controller with temp locations (never starts audio)
 
 struct CountingListener : public juce::ChangeListener
@@ -1417,6 +1631,12 @@ int main()
     testAppPrefs();
     testSafetySettings();
     testDynamics();
+   #if JUCE_WINDOWS
+    testWasapiFormat();
+    testStereoMaps();
+    testEndpointTraits();
+    testDefaultRoles();
+   #endif
     testControllerApi();
     std::printf (failures ? "FAILED: %d\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;
