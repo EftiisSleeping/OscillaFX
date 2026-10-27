@@ -1,4 +1,5 @@
 #include "ui/crt/Gallery.h"
+#include "platform/win/ImageHeader.h"
 #include "platform/win/WicImage.h"
 
 namespace Crt
@@ -9,7 +10,11 @@ namespace
 LuminanceImage decodeWithJuce (const juce::File& file, int maxSide)
 {
     LuminanceImage result;
-    auto image = juce::ImageFileFormat::loadFrom (file);
+    juce::FileInputStream stream (file);
+    const auto pixels = stream.openedOk() ? ImageHeader::pixelCount (stream) : -1;
+    if (pixels <= 0 || pixels > ImageHeader::MAX_PIXELS)
+        return result;
+    auto image = juce::ImageFileFormat::loadFrom (stream);
     if (! image.isValid())
         return result;
 

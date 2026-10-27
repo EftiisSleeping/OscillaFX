@@ -24,6 +24,7 @@
 #include <iterator>
 #include <random>
 #include <thread>
+#include <tuple>
 
 #if JUCE_MAC
  #include "audio/mac/CoreAudioHelpers.h"
@@ -34,6 +35,7 @@
  #include "audio/win/EndpointTraits.h"
  #include "audio/win/WasapiFormat.h"
  #include "platform/LoginItem.h"
+ #include "platform/win/ImageHeader.h"
  #include "platform/win/WicImage.h"
  #include <juce_graphics/juce_graphics.h>
  #include <stdlib.h>
@@ -405,6 +407,15 @@ void testRestoreRecord()
     check (CrashWatchdog::writeRestoreUid ("SelfTest_UID"), "record written");
     check (file.loadFileAsString() == juce::String (CrashWatchdog::currentProcessId()) + "\nSelfTest_UID\n", "record is <pid>\\n<uid>");
     check (CrashWatchdog::readRestoreUid() == "SelfTest_UID", "uid read back");
+    check (CrashWatchdog::readRestoreRoles() == CrashWatchdog::DEFAULT_ROLES, "2-line record: console | multimedia roles");
+    const auto pid = juce::String (CrashWatchdog::currentProcessId());
+    check (CrashWatchdog::writeRestoreUid ("Roles_UID", CrashWatchdog::consoleRole | CrashWatchdog::communicationsRole)
+           && file.loadFileAsString() == pid + "\nRoles_UID\n5\n", "record with roles is <pid>\\n<uid>\\n<roles>");
+    check (CrashWatchdog::readRestoreUid() == "Roles_UID" && CrashWatchdog::readRestoreRoles() == 5, "uid and roles read back");
+    CrashWatchdog::writeRestoreUid ("Masked_UID", 0xff);
+    check (CrashWatchdog::readRestoreRoles() == CrashWatchdog::ALL_ROLES, "roles masked to the three roles");
+    file.replaceWithText (pid + "\nZero_UID\n0\n");
+    check (CrashWatchdog::readRestoreRoles() == CrashWatchdog::DEFAULT_ROLES, "roles 0 -> console | multimedia");
     file.replaceWithText ("Legacy_UID");
     check (CrashWatchdog::readRestoreUid() == "Legacy_UID", "legacy single-line record read");
     CrashWatchdog::clearRestoreUid();
@@ -1667,6 +1678,22 @@ void testWicThumbnail()
     auto text = dir.getChildFile ("text.png");
     text.replaceWithText ("not an image");
     check (! WicImage::decodeGrey (text, 512).isValid() && ! WicImage::probe (text).isDecodable, "text file is not decodable");
+    for (const auto& [name, bytes, size] : { std::tuple ("png", ImageFixtures::png, sizeof (ImageFixtures::png)),
+                                              std::tuple ("gif", ImageFixtures::gif, sizeof (ImageFixtures::gif)),
+                                              std::tuple ("jpg", ImageFixtures::jpg, sizeof (ImageFixtures::jpg)) })
+    {
+        juce::MemoryInputStream in (bytes, size, false);
+        check (ImageHeader::pixelCount (in) == 64, juce::String (name) + " header: 8x8 before decoding");
+    }
+    {
+        std::vector<juce::uint8> bomb (ImageFixtures::png, ImageFixtures::png + sizeof (ImageFixtures::png));
+        bomb[16] = 0; bomb[17] = 0; bomb[18] = 0x4e; bomb[19] = 0x20;   // width 20000
+        bomb[20] = 0; bomb[21] = 0; bomb[22] = 0x4e; bomb[23] = 0x20;   // height 20000
+        juce::MemoryInputStream in (bomb.data(), bomb.size(), false);
+        check (ImageHeader::pixelCount (in) == 400'000'000, "PNG claiming 20000x20000 is seen from its header");
+        juce::MemoryInputStream text ("not an image", 12, false);
+        check (ImageHeader::pixelCount (text) == -1, "unknown header -> -1");
+    }
     const auto tiff = dir.getChildFile ("scan.tif");
     writeBytes (tiff, ImageFixtures::tiff, sizeof (ImageFixtures::tiff));
     const auto info = WicImage::probe (tiff);

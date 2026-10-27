@@ -23,6 +23,7 @@ constexpr DWORD CLOSE_GRACE_MS = 4000;      // console close: time for the norma
 constexpr const wchar_t* SESSION_WINDOW_CLASS = L"OscillaFXSessionEnd";
 
 wchar_t restoreId[512] {};
+std::atomic<int> restoreRoles { CrashWatchdog::DEFAULT_ROLES };
 std::atomic<bool> hasRestoreId { false };
 std::atomic<bool> restoring { false };
 std::function<void()> quitCallback; // message thread only
@@ -31,7 +32,7 @@ LPTOP_LEVEL_EXCEPTION_FILTER previousFilter = nullptr;
 DWORD WINAPI restoreOnThisThread (void*)
 {
     const auto com = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
-    WinEndpoints::setDefaultForAllRoles (restoreId);
+    WinEndpoints::setDefaultForRoles (restoreId, restoreRoles.load());
     if (SUCCEEDED (com))
         CoUninitialize();
     return 0;
@@ -118,12 +119,13 @@ void installCrashHandlers()
     std::signal (SIGABRT, onAbort);
 }
 
-void setRestoreEndpoint (const wchar_t* endpointId)
+void setRestoreEndpoint (const wchar_t* endpointId, int roles)
 {
     hasRestoreId.store (false);
     if (endpointId == nullptr || *endpointId == L'\0')
         return;
     wcsncpy_s (restoreId, endpointId, _TRUNCATE);
+    restoreRoles.store (roles & CrashWatchdog::ALL_ROLES);
     restoring.store (false);
     hasRestoreId.store (true);
 }

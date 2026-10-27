@@ -1,4 +1,5 @@
 #include "platform/win/WicImage.h"
+#include "platform/win/ImageHeader.h"
 
 #include <windows.h>
 #include <wincodec.h>
@@ -167,7 +168,8 @@ Grey decodeGrey (const juce::File& file, int maxSide)
     ScopedCom com;
     auto source = open (file);
     UINT width = 0, height = 0;
-    if (source.frame == nullptr || FAILED (source.frame->GetSize (&width, &height)) || width == 0 || height == 0)
+    if (source.frame == nullptr || FAILED (source.frame->GetSize (&width, &height)) || width == 0 || height == 0
+        || (juce::int64) width * height > ImageHeader::MAX_PIXELS)
         return {};
     auto pixels = uprightScaled (source, width, height, juce::jmax (1, maxSide));
     UINT outWidth = 0, outHeight = 0;

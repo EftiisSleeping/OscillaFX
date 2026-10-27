@@ -1,4 +1,5 @@
 #include "platform/ImageValidation.h"
+#include "platform/win/ImageHeader.h"
 #include "platform/win/WicImage.h"
 
 #include <juce_graphics/juce_graphics.h>
@@ -9,7 +10,7 @@ namespace ImageValidation
 {
 namespace
 {
-constexpr juce::int64 MAX_PIXELS = 150'000'000;  // refuses decompression bombs before they decode
+constexpr juce::int64 MAX_PIXELS = ImageHeader::MAX_PIXELS;  // refuses decompression bombs before they decode
 constexpr int PROBE_SIDE = 32;
 const char* const FORMAT_LIST = "Use JPEG, PNG, WebP, HEIC, GIF or TIFF.";
 
@@ -65,12 +66,14 @@ Result inspectWithJuce (juce::FileInputStream& stream)
     if (extension == nullptr)
         return reject (juce::String ("Not an image file. ") + FORMAT_LIST);
 
-    stream.setPosition (0);
+    const auto pixels = ImageHeader::pixelCount (stream);   // before decoding: JUCE decodes it all at once
+    if (pixels <= 0)
+        return reject ("The image data is damaged.");
+    if (pixels > MAX_PIXELS)
+        return reject ("The image is too large (over 150 megapixels).");
     const auto image = format->decodeImage (stream);
     if (! image.isValid())
         return reject ("The image data is damaged.");
-    if ((juce::int64) image.getWidth() * image.getHeight() > MAX_PIXELS)
-        return reject ("The image is too large (over 150 megapixels).");
     return { true, extension, {} };
 }
 } // namespace

@@ -186,6 +186,12 @@ int wmain (int argc, wchar_t** argv)
     Runner run (argv[1]);
     run.crashCase ("crash restores saved endpoint", "would set default output to {real-b} ", L"%PID%\\n{real-b}\\n", fxDefault);
     run.crashCase ("saved endpoint gone -> other real endpoint", "would set default output to {real-a} ", L"%PID%\\n{unplugged}\\n", fxDefault);
+    run.crashCase ("2-line record restores console+multimedia only", "would set default output to {real-b} (Speakers (Realtek(R) Audio)) for console+multimedia ",
+                   L"%PID%\\n{real-b}\\n", fxDefault);
+    run.crashCase ("roles 7 restores all three roles", "for console+multimedia+communications ", L"%PID%\\n{real-b}\\n7\\n", fxDefault);
+    run.crashCase ("roles 4 restores communications only", "for communications ", L"%PID%\\n{real-b}\\n4\\n", fxDefault);
+    run.crashCase ("roles 0 / garbage fall back to console+multimedia", "for console+multimedia ", L"%PID%\\n{real-b}\\nxyz\\n", fxDefault);
+    run.crashCase ("CRLF 3-line record (text mode) is read", "for multimedia ", L"%PID%\\r\\n{real-b}\\r\\n2\\r\\n", fxDefault);
     run.crashCase ("CRLF record (text mode) is read", "would set default output to {real-b} ", L"%PID%\\r\\n{real-b}\\r\\n", fxDefault);
     run.crashCase ("default not the virtual endpoint -> untouched", "not the virtual device; nothing to do", L"%PID%\\n{real-b}\\n",
                    { L"{real-b}|Speakers (Realtek(R) Audio)", fxDefault.endpoints });

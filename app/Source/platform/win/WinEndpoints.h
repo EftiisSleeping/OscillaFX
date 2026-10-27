@@ -9,6 +9,7 @@
 
 #include <cwctype>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace WinEndpoints
@@ -126,15 +127,27 @@ inline Endpoint defaultRenderEndpoint()
     return detail::describe (device.Get());
 }
 
-// Makes `endpointId` the default for console, multimedia and communications. True if all three took.
-inline bool setDefaultForAllRoles (const wchar_t* endpointId)
+// Makes `endpointId` the default for the roles in `roleBits` (bit 1 << ERole: 1 console, 2 multimedia,
+// 4 communications). True if every requested role took.
+inline bool setDefaultForRoles (const wchar_t* endpointId, int roleBits)
 {
     auto policy = detail::createPolicyConfig();
     if (policy == nullptr)
         return false;
     bool allSet = true;
     for (auto role : { eConsole, eMultimedia, eCommunications })
-        allSet &= SUCCEEDED (policy->SetDefaultEndpoint (endpointId, role));
+        if ((roleBits & (1 << role)) != 0)
+            allSet &= SUCCEEDED (policy->SetDefaultEndpoint (endpointId, role));
     return allSet;
+}
+
+// "console+multimedia" etc., for logs.
+inline std::string roleNames (int roleBits)
+{
+    std::string names;
+    for (const auto& [bit, name] : { std::pair (1, "console"), std::pair (2, "multimedia"), std::pair (4, "communications") })
+        if ((roleBits & bit) != 0)
+            names += (names.empty() ? "" : "+") + std::string (name);
+    return names.empty() ? "none" : names;
 }
 } // namespace WinEndpoints

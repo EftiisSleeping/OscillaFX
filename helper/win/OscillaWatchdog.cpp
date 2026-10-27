@@ -3,10 +3,11 @@
 //
 //   OscillaWatchdog.exe <app-pid> <restore-file>     (spawned by the app: <app-pid> must be the parent)
 //
-// While routing, OscillaFX keeps <restore-file> = "<app pid>\n<real endpoint id>\n" and deletes it on
-// a clean stop. If the file still names the watched pid when that process exits, the app crashed or
-// was killed: if the virtual endpoint is still the default, make the saved one the default again
-// (console, multimedia and communications roles).
+// While routing, OscillaFX keeps <restore-file> = "<app pid>\n<real endpoint id>\n<roles>\n" and
+// deletes it on a clean stop. <roles> is the default-device roles it took over (bits: 1 console,
+// 2 multimedia, 4 communications); a record without that line means console + multimedia. If the
+// file still names the watched pid when that process exits, the app crashed or was killed: if the
+// virtual endpoint is still the default, make the saved one the default again for those roles only.
 //
 // Log: %LOCALAPPDATA%\OscillaFX\Logs\watchdog.log, or $OSCILLA_WATCHDOG_LOG.
 // OSCILLA_WATCHDOG_DRYRUN=1 logs the decision without touching the default endpoint. In dry-run,
@@ -145,27 +146,45 @@ Watch watchParent (DWORD appPid, HANDLE& process)
     return Watch::watching;
 }
 
-// Endpoint id left behind by an unclean exit of `appPid`; empty if the app stopped cleanly or the
+constexpr int DEFAULT_ROLES = 1 | 2;   // console | multimedia (CrashWatchdog::DEFAULT_ROLES)
+constexpr int ALL_ROLES = 1 | 2 | 4;
+
+struct PendingRestore
+{
+    std::wstring id;   // empty: nothing to restore
+    int roles = DEFAULT_ROLES;
+};
+
+std::string withoutCarriageReturn (std::string line)
+{
+    if (! line.empty() && line.back() == '\r')
+        line.pop_back();
+    return line;
+}
+
+// Restore left behind by an unclean exit of `appPid`; empty id if the app stopped cleanly or the
 // file belongs to another process (including the legacy single-line format).
-std::wstring pendingRestoreId (const wchar_t* path, DWORD appPid)
+PendingRestore pendingRestore (const wchar_t* path, DWORD appPid)
 {
     std::ifstream file (path, std::ios::binary);
-    std::string pidLine, id;
+    std::string pidLine, id, rolesLine;
     if (! std::getline (file, pidLine))
         return {};
-    if (! std::getline (file, id) || id.empty() || id == "\r")
+    if (! std::getline (file, id) || (id = withoutCarriageReturn (id)).empty())
     {
         logLine ("ignoring restore file in an old or unknown format");
         return {};
     }
-    if (! id.empty() && id.back() == '\r')
-        id.pop_back();
     if (std::strtoul (pidLine.c_str(), nullptr, 10) != appPid)
     {
         logLine ("ignoring restore file of pid %s", pidLine.c_str());
         return {};
     }
-    return wide (id);
+    PendingRestore restore { wide (id), DEFAULT_ROLES };
+    if (std::getline (file, rolesLine))
+        if (const auto roles = (int) std::strtol (rolesLine.c_str(), nullptr, 10) & ALL_ROLES; roles != 0)
+            restore.roles = roles;
+    return restore;
 }
 
 // ---------------------------------------------------------------- endpoints
@@ -217,8 +236,10 @@ Endpoint restoreTarget (const std::wstring& savedId)
     return {};
 }
 
-void restoreOutput (const std::wstring& savedId)
+void restoreOutput (const PendingRestore& restore)
 {
+    const auto& savedId = restore.id;
+    const auto roles = WinEndpoints::roleNames (restore.roles);
     const auto current = currentDefault();
     if (! WinEndpoints::isFxSound (current))
         return logLine ("default output is %s, not the virtual device; nothing to do", utf8 (current.name).c_str());
@@ -228,12 +249,12 @@ void restoreOutput (const std::wstring& savedId)
         return logLine ("no real output device found (saved id %s); nothing to restore", utf8 (savedId).c_str());
 
     if (isDryRun())
-        return logLine ("DRY RUN: would set default output to %s (%s) (saved id %s)",
-                        utf8 (target.id).c_str(), utf8 (target.name).c_str(), utf8 (savedId).c_str());
+        return logLine ("DRY RUN: would set default output to %s (%s) for %s (saved id %s)",
+                        utf8 (target.id).c_str(), utf8 (target.name).c_str(), roles.c_str(), utf8 (savedId).c_str());
 
-    const bool ok = WinEndpoints::setDefaultForAllRoles (target.id.c_str());
-    logLine ("set default output to %s (%s) (saved id %s): %s",
-             utf8 (target.id).c_str(), utf8 (target.name).c_str(), utf8 (savedId).c_str(), ok ? "ok" : "failed");
+    const bool ok = WinEndpoints::setDefaultForRoles (target.id.c_str(), restore.roles);
+    logLine ("set default output to %s (%s) for %s (saved id %s): %s",
+             utf8 (target.id).c_str(), utf8 (target.name).c_str(), roles.c_str(), utf8 (savedId).c_str(), ok ? "ok" : "failed");
 }
 } // namespace
 
@@ -259,15 +280,15 @@ int wmain (int argc, wchar_t** argv)
         CloseHandle (process);
     }
 
-    const auto id = pendingRestoreId (restorePath, appPid);
-    if (id.empty())
+    const auto restore = pendingRestore (restorePath, appPid);
+    if (restore.id.empty())
     {
         logLine ("pid %lu exited cleanly", appPid);
         return 0;
     }
     logLine ("pid %lu exited without restoring output", appPid);
     const auto com = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
-    restoreOutput (id);
+    restoreOutput (restore);
     if (SUCCEEDED (com))
         CoUninitialize();
     return 0;

@@ -11,6 +11,15 @@ namespace
 {
 // packaging/uninstall.sh runs the app binary with this to drop the SMAppService login item.
 const char* const UNREGISTER_LOGIN_ITEM_ARG = "--unregister-login-item";
+
+// The Windows installer runs `OscillaFX.exe --quit` before upgrading / uninstalling: the running
+// instance quits normally (engine stop restores the default output); with none running, exits at once.
+const char* const QUIT_ARG = "--quit";
+
+bool hasArgument (const juce::String& commandLine, const char* argument)
+{
+    return juce::StringArray::fromTokens (commandLine, true).contains (argument);
+}
 }
 
 class OscillaApplication : public juce::JUCEApplication
@@ -26,6 +35,11 @@ public:
 
     void initialise (const juce::String& commandLine) override
     {
+        if (hasArgument (commandLine, QUIT_ARG))   // no instance to stop
+        {
+            quit();
+            return;
+        }
         if (commandLine.contains (UNREGISTER_LOGIN_ITEM_ARG))
         {
             LoginItem::setEnabled (false);
@@ -59,6 +73,11 @@ public:
 
     void anotherInstanceStarted (const juce::String& commandLine) override
     {
+        if (hasArgument (commandLine, QUIT_ARG))
+        {
+            quit();   // shutdown() tears down the controller, which restores the system output
+            return;
+        }
         if (commandLine.contains (UNREGISTER_LOGIN_ITEM_ARG))
         {
             LoginItem::setEnabled (false);

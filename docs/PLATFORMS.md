@@ -46,8 +46,8 @@ interface headers. `#if JUCE_MAC` / `JUCE_WINDOWS` in shared code is limited to 
 |---|---|---|---|
 | `audio/AudioEngine.h` | `bool start(); void stop(); String lastError(); void applySettings(const DspSettings&); Array<OutputDevice> outputDevices(); OutputDevice currentOutputDevice(); void setOutputDevice(const String& uid); std::function<void(const OutputDevice&)> onOutputDeviceChanged; void getSpectrum(float* bands10); int getScopeSamples(float* l, float* r, int max);` | CoreAudio passthrough | WASAPI passthrough from the FxSound endpoint (see "Windows audio") |
 | `core/DeviceKind.h` | `Traits DeviceKinds::traitsFor(const String& uid, const String& name)` | CoreAudio transport + data source | endpoint form factor + enumerator (`audio/win/EndpointTraits`) |
-| `platform/CrashGuard.h` | `void installQuitSignals(std::function<void()>); void installCrashHandlers();` | signals + dispatch; `setRestoreDevice(AudioObjectID)` in `platform/mac/CrashGuardMac.h` | console Ctrl-C/close, `WM_ENDSESSION` (hidden window), unhandled exception / terminate / abort restore; `setRestoreEndpoint(const wchar_t*)` in `platform/win/CrashGuardWin.h` |
-| `platform/CrashWatchdog.h` | `File restoreFile(); bool writeRestoreUid(const String&); String readRestoreUid(); void clearRestoreUid();` (shared) `int currentProcessId(); bool launch();` (per OS) | spawns `Contents/Helpers/OscillaWatchdog` | spawns `OscillaWatchdog.exe` next to the exe, respawns it |
+| `platform/CrashGuard.h` | `void installQuitSignals(std::function<void()>); void installCrashHandlers();` | signals + dispatch; `setRestoreDevice(AudioObjectID)` in `platform/mac/CrashGuardMac.h` | console Ctrl-C/close, `WM_ENDSESSION` (hidden window), unhandled exception / terminate / abort restore; `setRestoreEndpoint(const wchar_t*, int roles = DEFAULT_ROLES)` in `platform/win/CrashGuardWin.h` |
+| `platform/CrashWatchdog.h` | `File restoreFile(); bool writeRestoreUid(const String&); bool writeRestoreUid(const String&, int roles); String readRestoreUid(); int readRestoreRoles(); void clearRestoreUid();` (shared) `int currentProcessId(); bool launch();` (per OS) | spawns `Contents/Helpers/OscillaWatchdog` | spawns `OscillaWatchdog.exe` next to the exe, respawns it |
 | `platform/LoginItem.h` | `bool isEnabled(); bool setEnabled(bool); void onLaunchFinished(std::function<void(bool launchedAtLogin)>);` | SMAppService / LaunchAgent | HKCU `Run\OscillaFX` = `"<exe>" --launched-at-login` |
 | `platform/MicrophoneAccess.h` | `Status status(); void request(std::function<void(bool)>); void openSystemSettings();` | AVFoundation TCC | always granted; opens `ms-settings:privacy-microphone` |
 | `platform/ImageValidation.h` | `Result inspect(const File&)` (extension decided from bytes) | ImageIO: jpg png webp heic gif tiff | WIC: jpg png gif tiff (+ webp heic with the Store codecs), JUCE fallback |
@@ -140,11 +140,15 @@ old "DFX Audio Enhancer"), as FxSound does.
 
 1. **Audio backend** (done, see above; needs verification on real hardware with the driver installed).
 2. **Crash safety** (done): when routing starts, the engine calls
-   `CrashWatchdog::writeRestoreUid(<real endpoint id, IMMDevice::GetId, UTF-8>)` and
-   `CrashGuard::setRestoreEndpoint(id)` (`platform/win/CrashGuardWin.h`); on a clean stop
-   `clearRestoreUid()` and `setRestoreEndpoint(nullptr)`. The watchdog acts only if the default render
-   endpoint's friendly name contains "FxSound Audio Enhancer"; it restores the saved endpoint (or any
-   other active one) for all three roles. Log: `%LOCALAPPDATA%\OscillaFX\Logs\watchdog.log`.
+   `CrashWatchdog::writeRestoreUid(<real endpoint id, IMMDevice::GetId, UTF-8>, roles)` and
+   `CrashGuard::setRestoreEndpoint(id, roles)` (`platform/win/CrashGuardWin.h`); on a clean stop
+   `clearRestoreUid()` and `setRestoreEndpoint(nullptr)`. `roles` = the default-device roles OscillaFX
+   took over, `CrashWatchdog::RoleBits` (`consoleRole` 1, `multimediaRole` 2, `communicationsRole` 4 =
+   `1 << ERole`); default `DEFAULT_ROLES` (console | multimedia). Record: `<pid>\n<id>\n<roles>\n`; the
+   macOS 2-line `<pid>\n<uid>\n` is unchanged and, on Windows, means console | multimedia. The
+   watchdog acts only if the default render endpoint's friendly name contains "FxSound Audio
+   Enhancer"; it restores the saved endpoint (or any other active one) for the recorded roles only.
+   Log: `%LOCALAPPDATA%\OscillaFX\Logs\watchdog.log`.
 3. **Platform services** (done): login item (`--launched-at-login` starts in the tray; a Task Manager
    "Disabled" counts as off). `MicrophoneAccess_win.cpp` stays "granted" (loopback capture needs no consent).
 4. **Images** (done): WIC. WebP / HEIC need the Store "Webp Image Extensions" / "HEIF Image Extensions"
@@ -157,3 +161,9 @@ old "DFX Audio Enhancer"), as FxSound does.
    every exe of the build folder (`OscillaFX.exe`, `OscillaWatchdog.exe`), `Presets/`, `Gallery/` and the
    driver; stops both exes before upgrade / uninstall. The login item it writes is the same one
    `LoginItem_win.cpp` manages: `HKCU\...\Run\OscillaFX` = `"<app>\OscillaFX.exe" --launched-at-login`.
+   **Graceful quit**: `OscillaFX.exe --quit` makes a running instance quit normally (the engine stops and
+   restores the default output, the watchdog then exits by itself); with no instance running it exits
+   at once with code 0. The new process returns immediately: wait for `OscillaFX.exe` to exit (e.g. up
+   to 10 s) and only then fall back to `taskkill /F`. `taskkill` without `/F` (WM_CLOSE) only hides the
+   window. Logoff / shutdown / Restart Manager already quit normally (WM_QUERYENDSESSION) and restore
+   synchronously on WM_ENDSESSION.

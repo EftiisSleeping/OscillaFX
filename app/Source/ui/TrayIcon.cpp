@@ -2,6 +2,11 @@
 #include "ui/Brand.h"
 
 #if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
+
 namespace
 {
 constexpr int windowsIconSize = 32;   // Windows scales it to 16 / 20 / 24 px per DPI
@@ -89,6 +94,10 @@ void TrayIcon::mouseDown (const juce::MouseEvent& e)
         showWindow();
         return;
     }
+    // The menu only dismisses on a click outside it while OscillaFX is the foreground process.
+    juce::Process::makeForegroundProcess();
+    if (auto* hwnd = (HWND) getWindowHandle())
+        SetForegroundWindow (hwnd);
     buildMenu().showMenuAsync (juce::PopupMenu::Options().withMousePosition());
    #endif
 }
