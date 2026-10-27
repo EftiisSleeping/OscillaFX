@@ -2,9 +2,11 @@
 # silent install, upgrade over a running OscillaFX, silent uninstall. Changes the machine (installs the
 # FxSound driver and an HKCU Run value): do not run it on your own PC.
 # A driver that cannot be installed (no audio stack on the runner) is reported, not failed.
-# Usage: packaging\windows\test_installer.ps1 -Setup dist\OscillaFX-0.4.0-Setup-x64.exe [-LogDir logs]
+# Usage: packaging\windows\test_installer.ps1 -Setup dist\OscillaFX-0.4.0-Setup-x64.exe
+#            [-AppBuildDir build-win\OscillaFX_artefacts\Release] [-LogDir logs]
 param(
     [Parameter(Mandatory)][string]$Setup,
+    [string]$AppBuildDir = "build-win\OscillaFX_artefacts\Release",
     [string]$LogDir = "installer-logs"
 )
 $ErrorActionPreference = "Stop"
@@ -70,6 +72,9 @@ function Assert-Installed {
         Assert-True (Test-Path "$InstallDir\$file") "installed $file"
     }
     Assert-True ((Get-ChildItem "$InstallDir\Presets" -Filter *.fac).Count -gt 0) "installed Presets\*.fac"
+    foreach ($exe in Get-ChildItem "$AppBuildDir\*.exe") { # OscillaFX.exe, OscillaWatchdog.exe when built
+        Assert-True (Test-Path "$InstallDir\$($exe.Name)") "installed $($exe.Name) from the build"
+    }
     $expected = Get-Content "$PSScriptRoot\..\..\driver\windows\SHA256SUMS" | Where-Object { $_ -like "* x64/*" } |
         ForEach-Object { ($_ -split '\s+')[0].ToUpper() }
     $actual = Get-ChildItem "$InstallDir\Driver\fxvad*" | ForEach-Object { (Get-FileHash $_ -Algorithm SHA256).Hash }

@@ -174,7 +174,7 @@ cmake --build build-win --config Release
 packaging\windows\build_installer.ps1     # -> dist\OscillaFX-<version>-Setup-x64.exe
 ```
 
-Needs Visual Studio 2022 or newer with C++, CMake 3.22+, Python 3 with Pillow (`pip install pillow`)
+Needs PowerShell 7+, Visual Studio 2022 or newer with C++, CMake 3.22+, Python 3 with Pillow (`pip install pillow`)
 and Inno Setup 6.3+. The script builds `fxdevcon.exe` from FxSound's source
 (`driver/windows/fxdevcon`), checks the vendored driver against `driver/windows/SHA256SUMS`,
 turns `packaging/icon/OscillaFX.png` into the setup icon and runs `packaging/windows/OscillaFX.iss`.

@@ -1,7 +1,7 @@
 # FxSound virtual audio driver (Windows)
 
 OscillaFX on Windows routes system sound through FxSound's virtual audio driver, the same way FxSound
-does. The files here are copied from the FxSound source repository and are **not modified**.
+does. The files here are copied from the FxSound source repository; the signed content is unchanged (see the line-ending note below).
 
 - Origin: https://github.com/fxsound2/fxsound-app (AGPL-3.0), `Installer/Drivers/Version14/win10/{x64,arm64,x86}`
   and `Installer/DfxInstall/{fxdevcon,DfxInstall}`. Copyright (C) FxSound LLC.
@@ -9,8 +9,13 @@ does. The files here are copied from the FxSound source repository and are **not
   Windows 10 and 11, attestation-signed through Microsoft (the catalog's signer is "Microsoft Windows
   Hardware Compatibility Publisher"). The catalog hashes the exact INF and SYS bytes: changing any
   byte, including line endings, breaks the signature and Windows refuses the driver.
-  `.gitattributes` keeps this folder unconverted; `SHA256SUMS` lists the expected hashes and
-  `packaging/windows/build_installer.ps1` checks them before packaging.
+  The INFs were signed with CRLF line endings, but FxSound's git repository stores them with LF, so a
+  plain copy from the source tree fails on Windows ("Driver package INF file hash is not present in
+  catalog file", 0xE000024B). The INFs here are those files with CRLF restored and nothing else
+  changed; their SHA-256 is then exactly the one inside each catalog. The `.sys` and `.cat` files are
+  byte-identical copies. `.gitattributes` keeps this folder unconverted; `SHA256SUMS` lists the
+  hashes and `packaging/windows/build_installer.ps1` checks them, and each INF against its catalog,
+  before packaging.
 - Because the INF cannot change, the device keeps FxSound's names: the playback device is
   **"FxSound Audio Enhancer"**, provider/manufacturer "FxSound", service `FXVAD`, hardware id `Root\FXVAD`.
 - FxSound's prebuilt `fxdevcon64.exe` / `fxdevcon32.exe` are deliberately left out. `fxdevcon/` builds

@@ -10,7 +10,8 @@ It includes or links the following works.
   Windows compatibility shim, 32-bit integer fixes, initialisation fixes, path handling),
   and `presets_fxsound/` (bonus presets; presets marked "(Quizal)" were contributed to FxSound by their author).
 - Windows driver: `driver/windows/{x64,arm64,x86}` are FxSound's signed virtual audio driver package
-  (`fxvad.inf`, `fxvad.sys`, `fxvadnt*.cat`, from `Installer/Drivers/Version14/win10`), copied unchanged. The
+  (`fxvad.inf`, `fxvad.sys`, `fxvadnt*.cat`, from `Installer/Drivers/Version14/win10`), copied unchanged except
+  that the INFs get back the CRLF line endings they were signed with (`driver/windows/README.md`). The
   device keeps FxSound's names ("FxSound Audio Enhancer", hardware id `Root\FXVAD`) because the signature covers the INF.
   The Windows installer ships the x64 set in `Driver\`.
 - Windows device installer: `driver/windows/fxdevcon/src` is FxSound's `fxdevcon` tool (`Installer/DfxInstall`),

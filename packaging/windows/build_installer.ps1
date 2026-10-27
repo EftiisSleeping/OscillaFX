@@ -2,7 +2,8 @@
 # <OutDir>\OscillaFX-<version>-Setup-x64.exe. Builds fxdevcon.exe, checks the vendored driver hashes,
 # converts the icon and runs Inno Setup 6.3+ (ISCC). Installs nothing.
 # Needs: Visual Studio (C++), CMake, Python 3 with Pillow, Inno Setup 6.3+.
-# Usage: packaging\windows\build_installer.ps1 [-BuildDir build-win] [-OutDir dist]
+# Usage: packaging\windows\build_installer.ps1 [-BuildDir build-win] [-OutDir dist]   (PowerShell 7+)
+#Requires -Version 7
 param(
     [string]$BuildDir = "build-win",
     [string]$OutDir = "dist"
@@ -26,12 +27,18 @@ function Get-ProjectVersion {
     $match.Matches[0].Groups[1].Value
 }
 
-# The driver catalog signs these exact bytes; a changed line ending would make Windows refuse it.
+# The driver catalog signs these exact bytes; a changed line ending would make Windows refuse it
+# ("INF file hash is not present in catalog file"). Each INF's SHA-256 must appear in its catalog.
 function Assert-DriverUnchanged {
     foreach ($line in Get-Content "$DriverDir\SHA256SUMS") {
         $expected, $file = $line -split '\s+', 2
         $actual = (Get-FileHash "$DriverDir\$file" -Algorithm SHA256).Hash
         if ($actual -ne $expected.ToUpper()) { throw "driver/windows/$file differs from FxSound's signed file" }
+    }
+    foreach ($arch in "x64", "arm64", "x86") {
+        $catalog = [Convert]::ToHexString([IO.File]::ReadAllBytes((Get-Item "$DriverDir\$arch\fxvadnt*.cat").FullName))
+        $infHash = (Get-FileHash "$DriverDir\$arch\fxvad.inf" -Algorithm SHA256).Hash
+        if (-not $catalog.Contains($infHash)) { throw "driver/windows/$arch/fxvad.inf is not the INF its catalog signs" }
     }
 }
 
