@@ -42,6 +42,10 @@
  #include <stdlib.h>
 #endif
 
+// engine/platform/dsp_platform.cpp string helpers (C++ linkage, no header)
+int pstrConvertToWideCharString (char* in, wchar_t* out, int max);
+int pstrConvertWideCharStringToAnsiCharString (wchar_t* in, char* out, int max);
+
 namespace
 {
 int failures = 0;
@@ -338,10 +342,6 @@ void prepareLiveDsp (DfxDsp& dsp)
     dsp.setSignalFormat (32, 2, 48000, 32);
     DspParamsApply::configureBands (dsp);
 }
-
-// engine/platform/dsp_platform.cpp string helpers (C++ linkage, no header)
-int pstrConvertToWideCharString (char* in, wchar_t* out, int max);
-int pstrConvertWideCharStringToAnsiCharString (wchar_t* in, char* out, int max);
 
 void testDspStrings()
 {
