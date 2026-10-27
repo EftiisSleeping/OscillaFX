@@ -61,12 +61,10 @@ int pstrCalcLocationOfStrInStr_Wide(wchar_t* hay, wchar_t* needle, int start, in
 
 // ---- files ----
 #ifdef _WIN32
-// Writes are binary so presets keep LF line ends, byte-identical to the macOS build (text-mode
-// reads accept both).
+// Text mode, as FxSound: presets get CRLF line ends on Windows (readers accept both). Binary mode
+// would make fwprintf write raw UTF-16.
 FILE* fileOpen_Wide(wchar_t* path, wchar_t* mode, CSlout*) {
-    std::wstring m = mode;
-    if (m.find(L'b') == std::wstring::npos && m.find_first_of(L"wa") != std::wstring::npos) m += L'b';
-    return _wfopen(path, m.c_str());
+    return _wfopen(path, mode);
 }
 int fileExist_Wide(wchar_t* path, int* exists) {
     struct _stat st; *exists = _wstat(path, &st) == 0; return OKAY;

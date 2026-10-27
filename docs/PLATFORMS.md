@@ -66,9 +66,9 @@ The DSP compiles natively with MSVC (real `windows.h`, `UNICODE`, `/w`, as FxSou
 `DfxDsp.vcxproj`); `engine/shim` is not used. `engine/platform/dsp_platform.cpp` (the former
 `tests/mac_platform.cpp`) is used on Windows too: its per-thread in-memory registry is what keeps
 DfxDsp instances on different threads independent (`engine_selftest` "thread_local dsp registry"),
-and it never writes to HKCU. On Windows its file helpers use `_wfopen`/`_wstat` directly and open
-files for writing in binary mode, so presets keep LF line ends and stay byte-identical across
-platforms (`.gitattributes` keeps `*.fac` unconverted on checkout). Its UTF-8/wide helpers handle
+and it never writes to HKCU. On Windows its file helpers use `_wfopen`/`_wstat` directly; presets
+are written in text mode as FxSound did (CRLF), and the preset check compares with line ends
+normalised (`.gitattributes` keeps the committed `*.fac` unconverted on checkout). Its UTF-8/wide helpers handle
 the Basic Multilingual Plane only on Windows (16-bit `wchar_t`).
 
 The whole build uses the static CRT (`/MT`), `/utf-8`, `/MP`, `_USE_MATH_DEFINES`; x64 only.
@@ -76,7 +76,7 @@ The whole build uses the static CRT (`/MT`), `/utf-8`, `/MP`, `_USE_MATH_DEFINES
 ## Tests
 
 `ctest` runs the same set on both platforms: `dsp_offline`, `preset_tuning`,
-`presets_match_make_preset` (`engine/tests/check_presets.cmake`, replaces the `diff` in
+`presets_match_make_preset` (`engine/tests/check_presets.cmake`, the ctest form of the `diff` in
 `engine/run_tests.sh`), `crt_trace_test`, `engine_selftest`. In `engine_selftest`, CoreAudio
 device listing and live device-kind checks are macOS only; TIFF / WebP / HEIC import and the symlink
 cases (need admin rights or developer mode on Windows) are skipped on Windows.
