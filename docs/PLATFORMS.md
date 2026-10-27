@@ -31,6 +31,8 @@ engine/          DfxDsp (ported FxSound DSP), builds on both
   shim/                       Windows SDK stand-ins, macOS only
 helper/          OscillaWatchdog (macOS); win/OscillaWatchdog.exe + watchdog_test (Windows)
 driver/          BlackHole-based HAL driver, macOS only
+  windows/       FxSound's signed virtual audio driver + fxdevcon source, Windows (README.md there)
+packaging/       build_release.sh (.pkg, macOS); windows/ Inno Setup installer + build/test scripts
 ```
 
 Rule: anything under a `mac/` or `win/` folder is built only on that OS (`OSCILLA_OS` in the
@@ -89,8 +91,10 @@ decoding, plus the audio backend's pure parts (sample conversion, channel maps, 
 default-role policy against a fake); WebP / HEIC import is expected only where the Store codec decodes the fixture, otherwise the
 error must name the Store extension. `crt_cpu_bench` times the CPU CRT renderer at 100/150/200 %.
 
-CI: `.github/workflows/ci.yml` (macOS arm64 Release; Windows MSVC 2022 x64 Release, uploads the
-built `OscillaFX.exe` folder).
+CI: `.github/workflows/ci.yml` (macOS arm64 Release; Windows MSVC x64 Release, uploads the
+built `OscillaFX.exe` folder, builds the installer, smoke-tests it with a silent install / upgrade /
+uninstall and uploads `OscillaFX-<version>-Setup-x64.exe`). `.github/workflows/release.yml` (tags `v*`,
+manual) reuses it and adds the universal macOS `.pkg`.
 
 ## Windows audio
 
@@ -149,8 +153,7 @@ old "DFX Audio Enhancer"), as FxSound does.
    (`SystemUsesLightTheme`), left click shows the window, right click the menu; Windows wording.
    Still open: optional GPU CRT (Direct3D 11 or OpenGL implementing `GpuCrtView`),
    `prefersReducedMotion()` from `SPI_GETCLIENTAREAANIMATION`.
-6. **Installer**: install the signed driver with FxSound's `fxdevcon64.exe install fxvad.inf`
-   (source `Installer/DfxInstall/fxdevcon`), install `OscillaFX.exe` + `Presets/` + `Gallery/`,
-   and `OscillaWatchdog.exe` next to `OscillaFX.exe` (the build copies it there); uninstall with
-   `fxdevcon64.exe remove` and `OscillaFX.exe --unregister-login-item` (close both exes first). AGPL-3.0
-   notices for the FxSound driver and tools go into `NOTICE.md`.
+6. **Installer** (done): `packaging/windows/OscillaFX.iss` (see `docs/INSTALL.md`, Windows). Installs
+   every exe of the build folder (`OscillaFX.exe`, `OscillaWatchdog.exe`), `Presets/`, `Gallery/` and the
+   driver; stops both exes before upgrade / uninstall. The login item it writes is the same one
+   `LoginItem_win.cpp` manages: `HKCU\...\Run\OscillaFX` = `"<app>\OscillaFX.exe" --launched-at-login`.

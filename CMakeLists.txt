@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Both are ignored outside Apple platforms.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 13.0 CACHE STRING "Minimum macOS version" FORCE)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
-project(OscillaFX VERSION 0.4.0 LANGUAGES C CXX)
+project(OscillaFX VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

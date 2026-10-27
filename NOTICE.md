@@ -9,6 +9,13 @@ It includes or links the following works.
 - Used in: `engine/dsp` and `engine/support` (the DfxDsp audio engine and support code, modified for macOS:
   Windows compatibility shim, 32-bit integer fixes, initialisation fixes, path handling),
   and `presets_fxsound/` (bonus presets; presets marked "(Quizal)" were contributed to FxSound by their author).
+- Windows driver: `driver/windows/{x64,arm64,x86}` are FxSound's signed virtual audio driver package
+  (`fxvad.inf`, `fxvad.sys`, `fxvadnt*.cat`, from `Installer/Drivers/Version14/win10`), copied unchanged except
+  that the INFs get back the CRLF line endings they were signed with (`driver/windows/README.md`). The
+  device keeps FxSound's names ("FxSound Audio Enhancer", hardware id `Root\FXVAD`) because the signature covers the INF.
+  The Windows installer ships the x64 set in `Driver\`.
+- Windows device installer: `driver/windows/fxdevcon/src` is FxSound's `fxdevcon` tool (`Installer/DfxInstall`),
+  unchanged, built from source by OscillaFX's CMake project as `fxdevcon.exe`.
 
 ## BlackHole (GPL-3.0)
 - Source: https://github.com/ExistentialAudio/BlackHole
