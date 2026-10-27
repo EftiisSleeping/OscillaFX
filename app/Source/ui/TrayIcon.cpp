@@ -1,28 +1,6 @@
 #include "ui/TrayIcon.h"
 #include "ui/Brand.h"
 
-TrayIcon::TrayIcon (Controller& c, std::function<void()> show, std::function<void()> tour, std::function<void()> quitApp)
-    : controller (c), showWindow (std::move (show)), showTour (std::move (tour)), quit (std::move (quitApp))
-{
-   #if JUCE_MAC
-    juce::MenuBarModel::setMacMainMenu (&menuModel);
-   #endif
-    iconPowerOn = controller.settings().power;
-   #if JUCE_WINDOWS
-    iconForLightTaskbar = isTaskbarLight();
-   #endif
-    setIconImage (drawIcon (iconPowerOn), drawIcon (iconPowerOn));
-    setIconTooltip ("OscillaFX");
-    startTimer (1000);
-}
-
-TrayIcon::~TrayIcon()
-{
-   #if JUCE_MAC
-    juce::MenuBarModel::setMacMainMenu (nullptr);
-   #endif
-}
-
 #if JUCE_WINDOWS
 namespace
 {
@@ -45,6 +23,28 @@ juce::Image tintedGlyph (juce::Colour colour)
 }
 }
 #endif
+
+TrayIcon::TrayIcon (Controller& c, std::function<void()> show, std::function<void()> tour, std::function<void()> quitApp)
+    : controller (c), showWindow (std::move (show)), showTour (std::move (tour)), quit (std::move (quitApp))
+{
+   #if JUCE_MAC
+    juce::MenuBarModel::setMacMainMenu (&menuModel);
+   #endif
+    iconPowerOn = controller.settings().power;
+   #if JUCE_WINDOWS
+    iconForLightTaskbar = isTaskbarLight();
+   #endif
+    setIconImage (drawIcon (iconPowerOn), drawIcon (iconPowerOn));
+    setIconTooltip ("OscillaFX");
+    startTimer (1000);
+}
+
+TrayIcon::~TrayIcon()
+{
+   #if JUCE_MAC
+    juce::MenuBarModel::setMacMainMenu (nullptr);
+   #endif
+}
 
 // macOS: the butterfly silhouette is a template image, tinted by the system for light and dark menu
 // bars. Windows has no template images: the glyph is drawn in the taskbar's contrast colour. Power off
