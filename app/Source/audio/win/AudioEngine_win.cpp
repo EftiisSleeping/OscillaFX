@@ -2,6 +2,7 @@
 
 #include "audio/win/DefaultRoles.h"
 #include "audio/win/MMDeviceHelpers.h"
+#include "audio/win/StreamThreads.h"
 #include "audio/win/WasapiFormat.h"
 #include "platform/CrashWatchdog.h"
 #include "platform/win/CrashGuardWin.h"
@@ -15,6 +16,7 @@
 
 #include <juce_events/juce_events.h>
 #include <avrt.h>
+#include <tlhelp32.h>
 #include <algorithm>
 #include <atomic>
 #include <functional>
@@ -60,9 +62,26 @@ constexpr DWORD CAPTURE_FLAGS = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_SESSIONFL
 constexpr DWORD RENDER_FLAGS = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_SESSIONFLAGS_DISPLAY_HIDE;
 
 const char* const VIRTUAL_MISSING = "Virtual device \"FxSound Audio Enhancer\" not found. Reinstall OscillaFX.";
+const char* const FXSOUND_RUNNING_UTF8 =
+    "FxSound is running. Quit FxSound to use OscillaFX \xe2\x80\x94 they share the same virtual device.";
 const char* const CAPTURE_BLOCKED =
     "Windows blocked audio capture from \"FxSound Audio Enhancer\". Turn on \"Let desktop apps access your "
     "microphone\" in Settings > Privacy > Microphone, then turn OscillaFX on again.";
+
+// FxSound's own app drives the same virtual endpoint (default device, volume, its own passthrough).
+bool isFxSoundAppRunning()
+{
+    const HANDLE snapshot = CreateToolhelp32Snapshot (TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return false;
+    PROCESSENTRY32W entry {};
+    entry.dwSize = sizeof (entry);
+    bool found = false;
+    for (BOOL more = Process32FirstW (snapshot, &entry); more && ! found; more = Process32NextW (snapshot, &entry))
+        found = _wcsicmp (entry.szExeFile, L"FxSound.exe") == 0;
+    CloseHandle (snapshot);
+    return found;
+}
 
 bool isAccessDenied (HRESULT hr) { return hr == E_ACCESSDENIED; }
 
@@ -121,6 +140,17 @@ struct SavedVolume
 };
 
 enum class RouteResult { ok, outputFailed, captureFailed };
+
+// engine_selftest --live-audio on a CI runner whose only endpoint is FxSound's: route the virtual
+// endpoint onto itself so start / stop run for real. Compiled into the self-test only.
+bool virtualOutputAllowedForTest()
+{
+   #if OSCILLA_ENGINE_SELFTEST
+    return juce::SystemStats::getEnvironmentVariable ("OSCILLA_TEST_VIRTUAL_OUTPUT", {}) == "1";
+   #else
+    return false;
+   #endif
+}
 } // namespace
 
 struct AudioEngine::Impl
@@ -144,10 +174,12 @@ struct AudioEngine::Impl
 
     bool isUsableOutput (const juce::String& id) const
     {
-        if (enumerator == nullptr || id.isEmpty() || id == virtualId || ! MM::isActiveRender (*enumerator.Get(), id))
+        if (enumerator == nullptr || id.isEmpty() || ! MM::isActiveRender (*enumerator.Get(), id))
             return false;
+        if (virtualOutputAllowed)
+            return true;
         auto device = MM::deviceById (*enumerator.Get(), id);
-        return device != nullptr && ! MM::isFxSoundEndpoint (MM::describe (*device.Get()));
+        return id != virtualId && device != nullptr && ! MM::isFxSoundEndpoint (MM::describe (*device.Get()));
     }
 
     juce::Array<MM::Endpoint> usableEndpoints() const
@@ -156,7 +188,7 @@ struct AudioEngine::Impl
         if (enumerator == nullptr)
             return result;
         for (auto& endpoint : MM::renderEndpoints (*enumerator.Get()))
-            if (endpoint.id != virtualId && ! MM::isFxSoundEndpoint (endpoint))
+            if (virtualOutputAllowed || (endpoint.id != virtualId && ! MM::isFxSoundEndpoint (endpoint)))
                 result.add (endpoint);
         return result;
     }
@@ -216,6 +248,8 @@ struct AudioEngine::Impl
         virtualId = enumerator != nullptr ? MM::findFxSoundEndpoint (*enumerator.Get()) : juce::String();
         if (virtualId.isEmpty())
             return fail (VIRTUAL_MISSING);
+        if (isFxSoundAppRunning())
+            return fail (juce::String (juce::CharPointer_UTF8 (FXSOUND_RUNNING_UTF8)));
 
         auto initial = resolveInitialOutput();
         if (initial.isEmpty())
@@ -252,6 +286,7 @@ struct AudioEngine::Impl
         unregisterDeviceNotifications();
         stopRouting();
         restoreSavedVolume (true);
+        savedVolume = {};   // handed back: the next start saves the device's level afresh
         restoreSystemDefault();
     }
 
@@ -346,12 +381,15 @@ struct AudioEngine::Impl
     {
         auto output = MM::deviceById (*enumerator.Get(), outputId);
         auto virtualDevice = MM::deviceById (*enumerator.Get(), virtualId);
-        if (output == nullptr || ! openRender (*output.Get()))
+        if (output == nullptr)
+            return RouteResult::outputFailed;
+        // Before any stream is open: a format change invalidates streams on that endpoint.
+        MM::matchDeviceFormat (virtualId, virtualRateFor (mixRate (*output.Get())), VIRTUAL_CHANNELS);
+        if (! openRender (*output.Get()))
         {
             stopRouting();
             return RouteResult::outputFailed;
         }
-        MM::matchDeviceFormat (virtualId, virtualRateFor (renderFormat.sampleRate), VIRTUAL_CHANNELS);
         const HRESULT hr = virtualDevice != nullptr ? openCapture (*virtualDevice.Get()) : AUDCLNT_E_DEVICE_INVALIDATED;
         if (FAILED (hr))
         {
@@ -362,16 +400,14 @@ struct AudioEngine::Impl
 
         prepareDsp();
         renderMap = WasapiFormat::stereoMapFor (renderFormat.channels, renderFormat.channelMask);
-        captureMap = WasapiFormat::stereoMapFor (captureFormat.channels, captureFormat.channelMask);
+        captureMix = WasapiFormat::downmixFor (captureFormat.channels, captureFormat.channelMask);
         ring.reset();
         resampler.prepare (captureFormat.sampleRate, renderFormat.sampleRate, targetFill());
         prefillSilence();
 
         captureFault.store (S_OK);
         renderFault.store (S_OK);
-        ResetEvent (stopEvent.get());
-        captureThread = std::thread ([this] { captureLoop(); });
-        renderThread = std::thread ([this] { renderLoop(); });
+        streams.start ([this] (HANDLE stop) { captureLoop (stop); }, [this] (HANDLE stop) { renderLoop (stop); });
         if (FAILED (captureClient->Start()) || FAILED (renderClient->Start()))
         {
             stopRouting();
@@ -389,6 +425,17 @@ struct AudioEngine::Impl
         const auto captureFrames = (size_t) ((double) period * captureFormat.sampleRate / 1.0e7);
         const auto renderFrames = (size_t) ((double) renderBufferFrames * captureFormat.sampleRate / renderFormat.sampleRate);
         return std::max (2 * captureFrames + renderFrames, MIN_TARGET_FILL);
+    }
+
+    static double mixRate (IMMDevice& device)
+    {
+        auto client = activateClient (device);
+        WAVEFORMATEX* mix = nullptr;
+        if (client == nullptr || FAILED (client->GetMixFormat (&mix)) || mix == nullptr)
+            return 0;
+        const double rate = mix->nSamplesPerSec;
+        CoTaskMemFree (mix);
+        return rate;
     }
 
     // Shared mode in the endpoint's mix format, or the closest one it accepts (some Bluetooth
@@ -473,11 +520,7 @@ struct AudioEngine::Impl
 
     void stopRouting()
     {
-        SetEvent (stopEvent.get());
-        if (captureThread.joinable())
-            captureThread.join();
-        if (renderThread.joinable())
-            renderThread.join();
+        streams.stop();
         if (renderClient != nullptr)
             renderClient->Stop();
         if (captureClient != nullptr)
@@ -512,10 +555,15 @@ struct AudioEngine::Impl
         });
     }
 
-    // ---------------------------------------------------------------- volume mirroring (as FxSound)
-    // The virtual endpoint carries the system volume (keyboard keys, tray slider); the real endpoint
-    // follows it both ways. The real endpoint's own setting is saved and put back when OscillaFX
-    // leaves it: in full when switching to another output, never louder than now when stopping.
+    // ---------------------------------------------------------------- volume mirroring
+    // The virtual endpoint carries the system volume (keyboard keys, tray slider) and the real
+    // endpoint follows it, both ways. On attach the real endpoint's level is copied onto the virtual
+    // one (as the macOS engine does), so the speakers keep the level they had. The real endpoint's
+    // own setting is saved and put back when OscillaFX leaves it: in full when switching to another
+    // output, never louder than now when stopping (as FxSound).
+    // No gain compensation on the captured signal, as FxSound: WASAPI loopback taps the endpoint's
+    // mix before its endpoint volume is applied, so the level is applied once, on the real endpoint.
+    // (macOS compensates because the HAL driver scales its own stream by its volume.)
 
     ComPtr<IAudioEndpointVolume> activateVolume (const juce::String& id) const
     {
@@ -557,7 +605,7 @@ struct AudioEngine::Impl
         }
         if (! savedVolume.valid)
             saveOutputVolume();
-        copyVolume (*virtualVolume.Get(), *outputVolume.Get());
+        copyVolume (*outputVolume.Get(), *virtualVolume.Get());
 
         virtualVolumeEvents.Attach (new VolumeNotifications (token, true, volumeContext));
         outputVolumeEvents.Attach (new VolumeNotifications (token, false, volumeContext));
@@ -680,12 +728,11 @@ struct AudioEngine::Impl
 
     // ---------------------------------------------------------------- audio threads
 
-    void captureLoop()
+    void captureLoop (HANDLE stop)
     {
         MM::ComScope threadCom (COINIT_MULTITHREADED);
         ProAudioPriority priority;
-        const HANDLE events[] = { stopEvent.get(), captureEvent.get() };
-        while (WaitForMultipleObjects (2, events, FALSE, CAPTURE_WAIT_MS) != WAIT_OBJECT_0)
+        while (! StreamThreads::shouldExit (stop, captureEvent.get(), CAPTURE_WAIT_MS))
         {
             const HRESULT hr = drainCapture();
             if (FAILED (hr))
@@ -744,7 +791,7 @@ struct AudioEngine::Impl
             if (silent || data == nullptr)
                 std::fill (captureScratch.begin(), captureScratch.begin() + 2 * frames, 0.0f);
             else
-                WasapiFormat::toStereo (data + (size_t) offset * (size_t) frameBytes, captureFormat, captureMap, captureScratch.data(), frames);
+                WasapiFormat::toStereo (data + (size_t) offset * (size_t) frameBytes, captureFormat, captureMix, captureScratch.data(), frames);
             dsp.processAudio ((short*) captureScratch.data(), (short*) processedScratch.data(), frames, 0);
             dynamics.process (processedScratch.data(), frames); // night mode, then the safety limiter: last in the chain
             taps.writeScope (processedScratch.data(), frames);
@@ -759,15 +806,14 @@ struct AudioEngine::Impl
         taps.writeSpectrum (bands);
     }
 
-    void renderLoop()
+    void renderLoop (HANDLE stop)
     {
         MM::ComScope threadCom (COINIT_MULTITHREADED);
         ProAudioPriority priority;
-        const HANDLE events[] = { stopEvent.get(), renderEvent.get() };
         const auto idleLimit = (UINT64) (IDLE_PAUSE_SECONDS * renderFormat.sampleRate);
         UINT64 idleFrames = 0;
         bool paused = false;
-        while (WaitForMultipleObjects (2, events, FALSE, paused ? PAUSED_POLL_MS : RENDER_WAIT_MS) != WAIT_OBJECT_0)
+        while (! StreamThreads::shouldExit (stop, renderEvent.get(), paused ? PAUSED_POLL_MS : RENDER_WAIT_MS))
         {
             HRESULT hr = S_OK;
             if (paused)
@@ -903,6 +949,7 @@ struct AudioEngine::Impl
     MM::ComScope com;
     ComPtr<IMMDeviceEnumerator> enumerator = MM::createEnumerator();
     juce::String virtualId, preferredId, outputId, error;
+    const bool virtualOutputAllowed = virtualOutputAllowedForTest();
     bool running = false, routing = false;
     DefaultRoles::Takeover takeover;
     GUID volumeContext {};
@@ -921,10 +968,11 @@ struct AudioEngine::Impl
     ComPtr<IAudioCaptureClient> captureService;
     ComPtr<IAudioRenderClient> renderService;
     WasapiFormat::StreamFormat captureFormat, renderFormat;
-    WasapiFormat::StereoMap captureMap, renderMap;
+    WasapiFormat::Downmix captureMix;
+    WasapiFormat::StereoMap renderMap;
     UINT32 renderBufferFrames = 0;
-    MM::Event stopEvent, captureEvent, renderEvent;
-    std::thread captureThread, renderThread;
+    MM::Event captureEvent, renderEvent;   // auto-reset: one wake-up per WASAPI buffer
+    StreamThreads streams;
 
     // Shared with the stream threads (lock-free)
     TripleBuffer<DspParams> pendingParams;

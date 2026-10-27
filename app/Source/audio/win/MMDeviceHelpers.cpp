@@ -181,7 +181,12 @@ bool matchDeviceFormat (const juce::String& id, int sampleRate, int channels)
         base.nAvgBytesPerSec = base.nSamplesPerSec * base.nBlockAlign;
         if (base.wFormatTag == WAVE_FORMAT_EXTENSIBLE && channels == 2)
             format->dwChannelMask = STEREO_MASK;
-        matches = SUCCEEDED (policy->SetDeviceFormat (id.toWideCharPointer(), format, nullptr));
+        // Endpoint format and mix format both: with a null mix format some builds keep the old mix.
+        const HRESULT hr = policy->SetDeviceFormat (id.toWideCharPointer(), format, format);
+        matches = SUCCEEDED (hr);
+        if (! matches)
+            juce::Logger::writeToLog ("OscillaFX: SetDeviceFormat " + juce::String (sampleRate) + " Hz / "
+                                      + juce::String (channels) + " ch failed, 0x" + juce::String::toHexString ((int) hr));
     }
     CoTaskMemFree (format);
     return matches;

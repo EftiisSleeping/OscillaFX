@@ -72,8 +72,8 @@ The DSP compiles natively with MSVC (real `windows.h`, `UNICODE`, `/w`, as FxSou
 DfxDsp instances on different threads independent (`engine_selftest` "thread_local dsp registry"),
 and it never writes to HKCU. On Windows its file helpers use `_wfopen`/`_wstat` directly; presets
 are written in text mode as FxSound did (CRLF), and the preset check compares with line ends
-normalised (`.gitattributes` keeps the committed `*.fac` unconverted on checkout). Its UTF-8/wide helpers handle
-the Basic Multilingual Plane only on Windows (16-bit `wchar_t`).
+normalised (`.gitattributes` keeps the committed `*.fac` unconverted on checkout). Its UTF-8/wide helpers use
+surrogate pairs for characters outside the Basic Multilingual Plane on Windows (16-bit `wchar_t`).
 
 The whole build uses the static CRT (`/MT`), `/utf-8`, `/MP`, `_USE_MATH_DEFINES`; x64 only.
 
@@ -85,7 +85,10 @@ The whole build uses the static CRT (`/MT`), `/utf-8`, `/MP`, `_USE_MATH_DEFINES
 device listing and live device-kind checks are macOS only; the symlink cases (need admin rights or
 developer mode on Windows) are skipped on Windows.
 `engine_selftest` runs from the repo root (macOS `__FILE__` is repo-relative).
-macOS also runs `engine/run_tests.sh` and `helper/test_watchdog.sh`. Windows adds `watchdog_test`
+macOS also runs `engine/run_tests.sh` and `helper/test_watchdog.sh`. Windows CI also runs `engine_selftest --live-audio` after installing
+FxSound's driver on the runner (audio services started, `OSCILLA_TEST_VIRTUAL_OUTPUT=1`: the runner
+has no real output, so the FxSound endpoint is routed onto itself, a self-test-only hook): two real
+start / stop rounds with the restore record checked; skipped if no endpoint appears. Windows adds `watchdog_test`
 (dry-run, fake app that kills itself) and, in `engine_selftest`, the HKCU Run round trip and WIC
 decoding, plus the audio backend's pure parts (sample conversion, channel maps, endpoint classifier,
 default-role policy against a fake); WebP / HEIC import is expected only where the Store codec decodes the fixture, otherwise the
@@ -116,16 +119,21 @@ old "DFX Audio Enhancer"), as FxSound does.
   faults through atomics; the message thread polls them and reopens the streams. The render stream is
   stopped after 2 s of silence (the PC can sleep) and restarted when audio arrives.
 - **Formats**: the FxSound endpoint is set to stereo at 48 kHz (48 kHz-family outputs) or 44.1 kHz via
-  `IPolicyConfig::SetDeviceFormat` (only when it differs), as FxSound does; stereo goes to the output's
-  front pair (quad: also the back pair), mono gets (L + R) / 2.
+  `IPolicyConfig::SetDeviceFormat` (only when it differs, before any stream is opened), as FxSound
+  does; stereo goes to the output's front pair (quad: also the back pair), mono gets (L + R) / 2. If the
+  endpoint stays multichannel the capture is downmixed (centre and surrounds -3 dB, LFE -6 dB).
 - **Default device** (`audio/win/DefaultRoles`): on start every role's default is remembered and
   console + multimedia point at the FxSound endpoint; communications follows only if it was on the
   same endpoint as console. A real endpoint picked in Windows settings while running becomes the
   output and the default goes back to FxSound. Stop / destructor hand the roles back to the output.
   The single `IPolicyConfigVista` definition lives in `platform/win/WinEndpoints.h`.
-- **Volume**: the FxSound endpoint's volume and mute (keyboard keys, tray) are mirrored to the real
-  endpoint and back (`IAudioEndpointVolumeCallback`, own context GUID); the real endpoint's own level
-  is saved and put back when OscillaFX leaves it (never louder than now on stop), as FxSound does.
+- **Volume**: on start the real endpoint's level and mute are copied onto the FxSound endpoint (the
+  speakers keep their level, as on macOS); from then on the FxSound endpoint's volume (keyboard keys,
+  tray) is mirrored to the real endpoint and back (`IAudioEndpointVolumeCallback`, own context GUID).
+  The real endpoint's own level is saved and put back when OscillaFX leaves it (never louder than now
+  on stop), as FxSound does. The captured signal gets no gain compensation, as in FxSound: WASAPI
+  loopback taps the endpoint mix before its endpoint volume, so the level is applied once, on the
+  real endpoint (macOS compensates because its HAL driver scales its own stream).
 - **Devices**: `IMMNotificationClient` events are marshalled to the message thread and coalesced
   (100 ms); a vanished output falls back to the original default or the first active endpoint, a
   vanished FxSound endpoint stops routing. `outputDevices()` excludes the FxSound endpoint;
@@ -134,7 +142,11 @@ old "DFX Audio Enhancer"), as FxSound does.
   `CrashGuard::setRestoreEndpoint(id)`; a clean stop clears both.
 - **Errors**: missing endpoint: "Virtual device "FxSound Audio Enhancer" not found. Reinstall
   OscillaFX." (defaults untouched); `E_ACCESSDENIED` at capture: points to Settings > Privacy >
-  Microphone; a capture thread that has not polled within 2 s stops routing and restores the default.
+  Microphone; FxSound.exe running: "FxSound is running. Quit FxSound to use OscillaFX — they share the
+  same virtual device."; a capture thread that has not polled within 2 s stops routing and restores
+  the default.
+- **Threads** (`audio/win/StreamThreads.h`): both stream threads wait on their own auto-reset WASAPI
+  event and one shared manual-reset stop event, so stop() always joins both.
 
 ## Remaining Windows work
 

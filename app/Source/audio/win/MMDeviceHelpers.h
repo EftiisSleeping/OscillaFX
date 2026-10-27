@@ -34,11 +34,12 @@ private:
     HRESULT result;
 };
 
-// Owns a Win32 event handle.
+// Owns a Win32 event handle. Auto-reset releases one waiter per SetEvent (WASAPI buffer events);
+// manual-reset stays signalled for every waiter until ResetEvent (a stop signal shared by threads).
 class Event
 {
 public:
-    Event() : handle (CreateEventW (nullptr, FALSE, FALSE, nullptr)) {}
+    explicit Event (bool manualReset = false) : handle (CreateEventW (nullptr, manualReset ? TRUE : FALSE, FALSE, nullptr)) {}
     ~Event() { if (handle != nullptr) CloseHandle (handle); }
     Event (const Event&) = delete;
     Event& operator= (const Event&) = delete;

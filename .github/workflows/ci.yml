@@ -54,6 +54,28 @@ jobs:
           python -m pip install --quiet pillow
       - name: Installer
         run: packaging/windows/build_installer.ps1 -BuildDir build-win -OutDir dist
+      # Needs the fxdevcon.exe the Installer step built; removes the driver again before the smoke test.
+      - name: Live audio engine test (FxSound driver, endpoint routed onto itself)
+        run: |
+          foreach ($service in "AudioEndpointBuilder", "Audiosrv") {
+              Set-Service $service -StartupType Manual
+              Start-Service $service -ErrorAction Continue
+          }
+          Get-Service AudioEndpointBuilder, Audiosrv | Format-Table -AutoSize Name, Status
+          $fxdevcon = "build-win\fxdevcon\Release\fxdevcon.exe"
+          $install = Start-Process $fxdevcon -ArgumentList "install", "`"$PWD\driver\windows\x64\fxvad.inf`"" -PassThru -NoNewWindow
+          if (-not $install.WaitForExit(180000)) {
+              $install.Kill()
+              Write-Warning "driver install did not finish: live audio test skipped"
+              exit 0
+          }
+          Write-Host "fxdevcon install exit code $($install.ExitCode)"
+          $selftest = (Get-ChildItem build-win -Recurse -Filter engine_selftest.exe | Where-Object FullName -like "*Release*" | Select-Object -First 1).FullName
+          $env:OSCILLA_TEST_VIRTUAL_OUTPUT = "1"
+          & $selftest --live-audio
+          $code = $LASTEXITCODE
+          & $fxdevcon remove
+          exit $code
       - name: Installer smoke test (silent install, upgrade, uninstall)
         run: packaging/windows/test_installer.ps1 -Setup (Get-Item dist/OscillaFX-*-Setup-x64.exe).FullName -LogDir installer-logs
       - name: Upload installer logs

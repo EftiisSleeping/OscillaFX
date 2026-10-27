@@ -151,7 +151,8 @@ target_sources(engine_selftest PRIVATE app/Tests/EngineSelfTest.cpp ${OSCILLA_SE
 target_include_directories(engine_selftest PRIVATE app/Source)
 target_compile_definitions(engine_selftest PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
-    JUCE_MODAL_LOOPS_PERMITTED=1) # tests pump the message loop
+    JUCE_MODAL_LOOPS_PERMITTED=1 # tests pump the message loop
+    OSCILLA_ENGINE_SELFTEST=1)   # audio/win test hook for `engine_selftest --live-audio`
 target_link_libraries(engine_selftest PRIVATE
     oscilla_dsp juce::juce_core juce::juce_events
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

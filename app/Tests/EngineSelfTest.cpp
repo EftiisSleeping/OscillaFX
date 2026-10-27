@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 #include <random>
 #include <thread>
@@ -32,6 +33,8 @@
 #if JUCE_WINDOWS
  #include "audio/win/DefaultRoles.h"
  #include "audio/win/EndpointTraits.h"
+ #include "audio/win/MMDeviceHelpers.h"
+ #include "audio/win/StreamThreads.h"
  #include "audio/win/WasapiFormat.h"
  #include "platform/LoginItem.h"
  #include "platform/win/WicImage.h"
@@ -334,6 +337,24 @@ void prepareLiveDsp (DfxDsp& dsp)
 {
     dsp.setSignalFormat (32, 2, 48000, 32);
     DspParamsApply::configureBands (dsp);
+}
+
+// engine/platform/dsp_platform.cpp string helpers (C++ linkage, no header)
+int pstrConvertToWideCharString (char* in, wchar_t* out, int max);
+int pstrConvertWideCharStringToAnsiCharString (wchar_t* in, char* out, int max);
+
+void testDspStrings()
+{
+    std::printf ("dsp string helpers\n");
+    char utf8[] = "Caf\xc3\xa9 \xf0\x9f\x98\x80 \xe2\x82\xac"; // e acute (2 bytes), U+1F600 (4), euro (3)
+    wchar_t wide[32] {};
+    check (pstrConvertToWideCharString (utf8, wide, 32) == 0, "utf-8 -> wide");
+    const bool utf16 = sizeof (wchar_t) == 2;
+    check (wide[3] == 0xe9 && (utf16 ? (wide[5] == 0xd83d && wide[6] == 0xde00 && wide[8] == 0x20ac)
+                                     : (wide[5] == 0x1f600 && wide[7] == 0x20ac)),
+           utf16 ? "U+1F600 as a surrogate pair (UTF-16 wchar_t)" : "U+1F600 as one code point (UTF-32 wchar_t)");
+    char back[64] {};
+    check (pstrConvertWideCharStringToAnsiCharString (wide, back, 64) == 0 && std::strcmp (back, utf8) == 0, "wide -> utf-8 round trip");
 }
 
 void testRegistryIsolation()
@@ -1343,16 +1364,69 @@ void testStereoMaps()
     fromStereo (stereoIn, quadFloat, quad, reinterpret_cast<uint8_t*> (outQuad), 2);
     check (near (outQuad[2], 0.5, 0) && near (outQuad[3], -0.5, 0) && near (outQuad[6], 0.25, 0), "quad back pair mirrors the front");
 
-    // 5.1 float capture -> stereo picks FL / FR, mono capture is duplicated
-    const float six51[] = { 0.1f, 0.2f, 0.9f, 0.9f, 0.9f, 0.9f, 0.3f, 0.4f, 0.9f, 0.9f, 0.9f, 0.9f };
+    // capture side: stereo copied, mono duplicated, multichannel downmixed
     float captured[4];
-    toStereo (reinterpret_cast<const uint8_t*> (six51), describe (true, false, 32, 6, 48000, 0x3f), surround51, captured, 2);
-    check (near (captured[0], 0.1f, 0) && near (captured[1], 0.2f, 0) && near (captured[2], 0.3f, 0) && near (captured[3], 0.4f, 0),
-           "5.1 capture -> front pair");
+    const float stereoFrames[] = { 0.1f, 0.2f, 0.3f, 0.4f };
+    toStereo (reinterpret_cast<const uint8_t*> (stereoFrames), describe (true, false, 32, 2, 48000, 0x3), downmixFor (2, 0x3), captured, 2);
+    check (near (captured[0], 0.1f, 0) && near (captured[1], 0.2f, 0) && near (captured[3], 0.4f, 0), "stereo capture copied");
     const int16_t monoIn[] = { 16384, -8192 };
-    toStereo (reinterpret_cast<const uint8_t*> (monoIn), describe (false, true, 16, 1, 48000, 0), mono, captured, 2);
+    toStereo (reinterpret_cast<const uint8_t*> (monoIn), describe (false, true, 16, 1, 48000, 0), downmixFor (1, 0), captured, 2);
     check (near (captured[0], 0.5, 0) && near (captured[1], 0.5, 0) && near (captured[2], -0.25, 0) && near (captured[3], -0.25, 0),
            "mono capture duplicated");
+    // FL FR FC LFE BL BR
+    const float six51[] = { 0.1f, 0.2f, 0.4f, 0.2f, 0.3f, 0.1f };
+    const float expectedLeft = 0.1f + 0.70710678f * 0.4f + 0.5f * 0.2f + 0.70710678f * 0.3f;
+    const float expectedRight = 0.2f + 0.70710678f * 0.4f + 0.5f * 0.2f + 0.70710678f * 0.1f;
+    toStereo (reinterpret_cast<const uint8_t*> (six51), describe (true, false, 32, 6, 48000, 0x3f), downmixFor (6, 0x3f), captured, 1);
+    check (near (captured[0], expectedLeft, 1e-6) && near (captured[1], expectedRight, 1e-6),
+           "5.1 capture downmixed: centre / surrounds -3 dB, LFE -6 dB");
+    toStereo (reinterpret_cast<const uint8_t*> (six51), describe (true, false, 32, 6, 48000, 0), downmixFor (6, 0), captured, 1);
+    check (near (captured[0], expectedLeft, 1e-6), "6 channels without mask taken as 5.1");
+    const auto sevenOne = downmixFor (8, 0x63f);
+    check (near (sevenOne.left[6], 0.70710678, 1e-6) && near (sevenOne.right[7], 0.70710678, 1e-6) && near (sevenOne.right[6], 0, 0),
+           "7.1 side pair to its own side");
+    const auto noPair = downmixFor (2, 0x10 | 0x40);
+    check (near (noPair.left[0], 1, 0) && near (noPair.right[1], 1, 0), "no usable pair: first two channels");
+}
+
+// Capture and render loops share one stop signal: stop() must end both (an auto-reset stop event
+// woke one, and join() hung the message thread).
+void testStreamThreads()
+{
+    std::printf ("stream threads\n");
+    MMDeviceHelpers::Event captureWork, renderWork;   // auto-reset, as the WASAPI buffer events
+    std::atomic<int> exited { 0 }, wakes { 0 };
+    auto loop = [&] (HANDLE work)
+    {
+        return [&exited, &wakes, work] (HANDLE stop)
+        {
+            while (! StreamThreads::shouldExit (stop, work, 5000))
+                ++wakes;
+            ++exited;
+        };
+    };
+    StreamThreads threads;
+    for (int round = 0; round < 3; ++round)
+    {
+        exited = 0;
+        threads.start (loop (captureWork.get()), loop (renderWork.get()));
+        SetEvent (captureWork.get());
+        SetEvent (renderWork.get());
+        Sleep (50);
+        std::atomic<bool> stopped { false };
+        std::thread stopper ([&] { threads.stop(); stopped = true; });
+        for (int waited = 0; ! stopped && waited < 2000; waited += 10)
+            Sleep (10);
+        if (! stopped)
+        {
+            std::printf ("  [FAIL] round %d: stop() did not join both stream threads within 2 s\n", round);
+            std::fflush (stdout);
+            std::_Exit (1);   // the hung threads cannot be recovered
+        }
+        stopper.join();
+        check (exited == 2, "round " + juce::String (round) + ": stop() ends both loops");
+    }
+    check (wakes >= 6, "work events reach each loop");
 }
 
 void testEndpointTraits()
@@ -1612,6 +1686,67 @@ void testControllerApi()
     }
     root.deleteRecursively();
 }
+
+#if JUCE_WINDOWS
+// engine_selftest --live-audio (CI, after installing FxSound's driver; OSCILLA_TEST_VIRTUAL_OUTPUT=1):
+// the runner has no real output, so the FxSound endpoint is routed onto itself and the real
+// start / stop path runs: COM streams, both stream threads, default roles, volume, restore record.
+// Changes the default playback device: never run it on your own PC.
+bool stopsWithin (AudioEngine& engine, int milliseconds)
+{
+    std::atomic<bool> stopped { false };
+    std::thread stopper ([&] { engine.stop(); stopped = true; });
+    for (int waited = 0; ! stopped && waited < milliseconds; waited += 10)
+        Sleep (10);
+    if (! stopped)
+    {
+        std::printf ("  [FAIL] AudioEngine::stop() still blocked after %d ms\n", milliseconds);
+        std::fflush (stdout);
+        std::_Exit (1);
+    }
+    stopper.join();
+    return true;
+}
+
+int runLiveAudioTest()
+{
+    std::printf ("live audio engine (FxSound endpoint)\n");
+    MMDeviceHelpers::ComScope com;
+    juce::String virtualId;
+    for (int waited = 0; waited < 30000 && virtualId.isEmpty(); waited += 500)
+    {
+        if (auto enumerator = MMDeviceHelpers::createEnumerator())
+            virtualId = MMDeviceHelpers::findFxSoundEndpoint (*enumerator.Get());
+        if (virtualId.isEmpty())
+            Sleep (500);
+    }
+    if (virtualId.isEmpty())
+    {
+        std::printf ("  SKIP: no active \"FxSound Audio Enhancer\" endpoint on this machine\n");
+        return 0;
+    }
+    std::printf ("  endpoint %s\n", virtualId.toRawUTF8());
+
+    AudioEngine engine;
+    engine.setOutputDevice (virtualId);
+    for (int round = 0; round < 2; ++round)
+    {
+        const juce::String tag = "round " + juce::String (round) + ": ";
+        const bool started = engine.start();
+        check (started, tag + "start() " + (started ? juce::String ("ok") : engine.lastError()));
+        if (! started)
+            break;
+        check (CrashWatchdog::readRestoreUid() == virtualId, tag + "restore record written");
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (3000);   // capture watch (2 s) must not trip
+        check (engine.lastError().isEmpty(), tag + "still routing after 3 s (" + engine.lastError() + ")");
+        check (engine.currentOutputDevice().uid == virtualId, tag + "output is the requested endpoint");
+        check (stopsWithin (engine, 5000), tag + "stop() returns: both stream threads joined");
+        check (CrashWatchdog::readRestoreUid().isEmpty(), tag + "restore record cleared");
+    }
+    std::printf (failures ? "FAILED: %d\n" : "ALL PASS\n", failures);
+    return failures ? 1 : 0;
+}
+#endif
 } // namespace
 
 #if JUCE_WINDOWS
@@ -1696,9 +1831,15 @@ void testLoginItem()
 }
 #endif
 
-int main()
+int main (int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+   #if JUCE_WINDOWS
+    if (argc > 1 && juce::String (argv[1]) == "--live-audio")
+        return runLiveAudioTest();
+   #else
+    juce::ignoreUnused (argc, argv);
+   #endif
     testDeviceListing();
     testProfileStore();
     testRingBufferThreaded();
@@ -1706,6 +1847,7 @@ int main()
     testTripleBuffer();
     testDspMapping();
     testRegistryIsolation();
+    testDspStrings();
     testPresets();
     testRestoreRecord();
     testDeviceKinds();
@@ -1719,6 +1861,7 @@ int main()
    #if JUCE_WINDOWS
     testWasapiFormat();
     testStereoMaps();
+    testStreamThreads();
     testEndpointTraits();
     testDefaultRoles();
    #endif

@@ -11,10 +11,16 @@
 #include <cstring>
 #include <sys/stat.h>
 
+// UTF-8 <-> wchar_t. wchar_t is UTF-32 on macOS and UTF-16 on Windows (surrogate pairs for
+// characters outside the Basic Multilingual Plane).
+static const bool WIDE_IS_UTF16 = sizeof(wchar_t) == 2;
+
 static std::string narrow(const wchar_t* w) {
     std::string out;
     for (; w && *w; ++w) {
         unsigned c = (unsigned)*w;
+        if (WIDE_IS_UTF16 && c >= 0xD800 && c <= 0xDBFF && (unsigned)w[1] >= 0xDC00 && (unsigned)w[1] <= 0xDFFF)
+            c = 0x10000 + ((c - 0xD800) << 10) + ((unsigned)*++w - 0xDC00);
         if (c < 0x80) out += (char)c;
         else if (c < 0x800) { out += (char)(0xC0 | (c >> 6)); out += (char)(0x80 | (c & 0x3F)); }
         else if (c < 0x10000) { out += (char)(0xE0 | (c >> 12)); out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F)); }
@@ -29,7 +35,13 @@ static std::wstring widen(const char* s) {
         unsigned c = *p++, n = 0;
         if (c >= 0xF0) { c &= 7; n = 3; } else if (c >= 0xE0) { c &= 15; n = 2; } else if (c >= 0xC0) { c &= 31; n = 1; }
         while (n-- && (*p & 0xC0) == 0x80) c = (c << 6) | (*p++ & 0x3F);
-        out += (wchar_t)c;
+        if (WIDE_IS_UTF16 && c >= 0x10000) {
+            c -= 0x10000;
+            out += (wchar_t)(0xD800 + (c >> 10));
+            out += (wchar_t)(0xDC00 + (c & 0x3FF));
+        } else {
+            out += (wchar_t)c;
+        }
     }
     return out;
 }

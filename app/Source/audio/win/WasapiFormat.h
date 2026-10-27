@@ -43,8 +43,22 @@ StereoMap stereoMapFor (int channels, uint32_t channelMask);
 float readSample (const uint8_t* source, SampleType);
 void writeSample (uint8_t* destination, SampleType, float value);   // clamps to the integer range
 
-// Device frames -> interleaved stereo (mono is duplicated).
-void toStereo (const uint8_t* source, const StreamFormat&, const StereoMap&, float* stereo, int frames);
+// Capture side: how each source channel feeds left / right. Stereo is a straight copy, mono is
+// duplicated, multichannel (when the virtual endpoint could not be set to stereo) is downmixed:
+// centre and side / back speakers at -3 dB, LFE and back centre at -6 dB. The safety limiter at the
+// end of the chain catches the extra headroom this can take.
+constexpr int MAX_CHANNELS = 18;
+
+struct Downmix
+{
+    int channels = 0;
+    float left[MAX_CHANNELS] {}, right[MAX_CHANNELS] {};
+};
+
+Downmix downmixFor (int channels, uint32_t channelMask);
+
+// Device frames -> interleaved stereo.
+void toStereo (const uint8_t* source, const StreamFormat&, const Downmix&, float* stereo, int frames);
 
 // Interleaved stereo -> device frames; channels outside the map are silent, mono gets (L + R) / 2.
 void fromStereo (const float* stereo, const StreamFormat&, const StereoMap&, uint8_t* destination, int frames);
