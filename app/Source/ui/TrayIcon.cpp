@@ -1,6 +1,29 @@
 #include "ui/TrayIcon.h"
 #include "ui/Brand.h"
 
+#if JUCE_WINDOWS
+namespace
+{
+constexpr int windowsIconSize = 32;   // Windows scales it to 16 / 20 / 24 px per DPI
+
+bool isTaskbarLight()
+{
+    return juce::WindowsRegistry::getValue ("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\\SystemUsesLightTheme",
+                                            "0").getIntValue() != 0;
+}
+
+// The silhouette in a solid colour: white on a dark taskbar, near-black on a light one.
+juce::Image tintedGlyph (juce::Colour colour)
+{
+    juce::Image icon (juce::Image::ARGB, windowsIconSize, windowsIconSize, true);
+    juce::Graphics g (icon);
+    g.setColour (colour);
+    g.drawImage (Brand::trayGlyph(), icon.getBounds().toFloat(), juce::RectanglePlacement::centred, true);
+    return icon;
+}
+}
+#endif
+
 TrayIcon::TrayIcon (Controller& c, std::function<void()> show, std::function<void()> tour, std::function<void()> quitApp)
     : controller (c), showWindow (std::move (show)), showTour (std::move (tour)), quit (std::move (quitApp))
 {
@@ -8,6 +31,9 @@ TrayIcon::TrayIcon (Controller& c, std::function<void()> show, std::function<voi
     juce::MenuBarModel::setMacMainMenu (&menuModel);
    #endif
     iconPowerOn = controller.settings().power;
+   #if JUCE_WINDOWS
+    iconForLightTaskbar = isTaskbarLight();
+   #endif
     setIconImage (drawIcon (iconPowerOn), drawIcon (iconPowerOn));
     setIconTooltip ("OscillaFX");
     startTimer (1000);
@@ -20,11 +46,16 @@ TrayIcon::~TrayIcon()
    #endif
 }
 
-// The butterfly silhouette is a template image: macOS tints it for light and dark menu bars. Power off
+// macOS: the butterfly silhouette is a template image, tinted by the system for light and dark menu
+// bars. Windows has no template images: the glyph is drawn in the taskbar's contrast colour. Power off
 // dims it (alpha only, so it stays a valid template).
 juce::Image TrayIcon::drawIcon (bool powerOn)
 {
+   #if JUCE_WINDOWS
+    auto glyph = tintedGlyph (isTaskbarLight() ? juce::Colour (0xff1a1a1a) : juce::Colours::white);
+   #else
     auto glyph = Brand::trayGlyph().createCopy();
+   #endif
     if (! powerOn)
         glyph.multiplyAllAlphas (0.45f);
     return glyph;
@@ -33,18 +64,31 @@ juce::Image TrayIcon::drawIcon (bool powerOn)
 void TrayIcon::refreshIcon()
 {
     const auto on = controller.settings().power;
+   #if JUCE_WINDOWS
+    const auto light = isTaskbarLight();
+    if (on == iconPowerOn && light == iconForLightTaskbar)
+        return;
+    iconForLightTaskbar = light;
+   #else
     if (on == iconPowerOn)
         return;
+   #endif
     iconPowerOn = on;
     setIconImage (drawIcon (on), drawIcon (on));
 }
 
-void TrayIcon::mouseDown (const juce::MouseEvent&)
+void TrayIcon::mouseDown (const juce::MouseEvent& e)
 {
     refreshIcon();
    #if JUCE_MAC
+    juce::ignoreUnused (e);
     showDropdownMenu (buildMenu());
    #else
+    if (! e.mods.isPopupMenu())   // Windows: left click opens the window, right click the menu
+    {
+        showWindow();
+        return;
+    }
     buildMenu().showMenuAsync (juce::PopupMenu::Options().withMousePosition());
    #endif
 }
@@ -92,10 +136,17 @@ juce::PopupMenu TrayIcon::buildMenu()
 
     menu.addSeparator();
     const auto startsAtLogin = controller.launchAtLogin();
-    menu.addItem ("Start at Login", true, startsAtLogin, [this, startsAtLogin] { controller.setLaunchAtLogin (! startsAtLogin); });
+   #if JUCE_WINDOWS   // Windows wording
+    const char* const startAtLoginText = "Start with Windows";
+    const char* const quitText = "Exit OscillaFX";
+   #else
+    const char* const startAtLoginText = "Start at Login";
+    const char* const quitText = "Quit OscillaFX";
+   #endif
+    menu.addItem (startAtLoginText, true, startsAtLogin, [this, startsAtLogin] { controller.setLaunchAtLogin (! startsAtLogin); });
     menu.addSeparator();
     menu.addItem ("Show Tour", showTour);
     menu.addItem ("Show OscillaFX", showWindow);
-    menu.addItem ("Quit OscillaFX", quit);
+    menu.addItem (quitText, quit);
     return menu;
 }

@@ -10,8 +10,13 @@ constexpr int MICROPHONE_POLL_MS = 2000; // picks up a grant made later in Syste
 
 juce::String microphoneDeniedMessage()
 {
+   #if JUCE_WINDOWS
+    return juce::String (juce::CharPointer_UTF8 ("MICROPHONE ACCESS NEEDED \xe2\x80\x94 SETTINGS "
+                                                 "\xe2\x96\xb8 PRIVACY & SECURITY \xe2\x96\xb8 MICROPHONE"));
+   #else
     return juce::String (juce::CharPointer_UTF8 ("MICROPHONE ACCESS NEEDED \xe2\x80\x94 SYSTEM SETTINGS "
                                                  "\xe2\x96\xb8 PRIVACY \xe2\x96\xb8 MICROPHONE"));
+   #endif
 }
 
 const char* const MICROPHONE_PENDING_MESSAGE = "ALLOW MICROPHONE ACCESS IN THE SYSTEM PROMPT";

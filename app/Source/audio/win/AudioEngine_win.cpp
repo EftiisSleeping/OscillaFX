@@ -4,6 +4,7 @@
 #include "audio/win/MMDeviceHelpers.h"
 #include "audio/win/WasapiFormat.h"
 #include "platform/CrashWatchdog.h"
+#include "platform/win/CrashGuardWin.h"
 #include "audio/DriftResampler.h"
 #include "audio/Dynamics.h"
 #include "audio/DspParams.h"
@@ -279,12 +280,15 @@ struct AudioEngine::Impl
                 for (auto role : { DefaultRoles::console, DefaultRoles::multimedia })
                     endpoints.setDefault (target, role);
         }
+        CrashGuard::setRestoreEndpoint (nullptr);
         CrashWatchdog::clearRestoreUid();
     }
 
+    // In-process (CrashGuard) and out-of-process (watchdog) crash restore both target the real output.
     void rememberOutput()
     {
         preferredId = outputId;
+        CrashGuard::setRestoreEndpoint (outputId.toWideCharPointer());
         if (! CrashWatchdog::writeRestoreUid (outputId))
             juce::Logger::writeToLog ("OscillaFX: could not write " + CrashWatchdog::restoreFile().getFullPathName());
     }

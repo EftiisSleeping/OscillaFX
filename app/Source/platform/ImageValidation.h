@@ -3,8 +3,8 @@
 #include <juce_core/juce_core.h>
 
 // Decides from the file's bytes (never the extension) whether a file is a picture the gallery can
-// show. Thread-safe. macOS sniffs with ImageIO (jpg png webp heic gif tiff); Windows decodes with
-// JUCE (jpg png gif only).
+// show. Thread-safe. macOS sniffs with ImageIO (jpg png webp heic gif tiff); Windows uses WIC (jpg png
+// gif tiff; webp / heic with the Microsoft Store codecs), falling back to JUCE's decoders (jpg png gif).
 namespace ImageValidation
 {
 struct Result

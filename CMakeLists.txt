@@ -108,9 +108,9 @@ else()
 endif()
 # ==== end bundled presets =====================================================
 
-# ==== crash watchdog (macOS) ==================================================
-# helper/OscillaWatchdog -> OscillaFX.app/Contents/Helpers (spawned by platform/mac/CrashWatchdog_mac.cpp).
-# Windows has no watchdog yet (platform/win/CrashWatchdog_win.cpp is a stub).
+# ==== crash watchdog ==========================================================
+# macOS: helper/OscillaWatchdog -> OscillaFX.app/Contents/Helpers (platform/mac/CrashWatchdog_mac.cpp).
+# Windows: helper/win/OscillaWatchdog.exe -> next to OscillaFX.exe (platform/win/CrashWatchdog_win.cpp).
 if(APPLE)
     add_subdirectory(helper)
     add_dependencies(OscillaFX OscillaWatchdog)
@@ -118,6 +118,13 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:OscillaFX>/Helpers"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:OscillaWatchdog>"
             "$<TARGET_BUNDLE_CONTENT_DIR:OscillaFX>/Helpers/OscillaWatchdog"
+        VERBATIM)
+else()
+    enable_testing()
+    add_subdirectory(helper/win)
+    add_dependencies(OscillaFX OscillaWatchdog)
+    add_custom_command(TARGET OscillaFX POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:OscillaWatchdog>" "$<TARGET_FILE_DIR:OscillaFX>"
         VERBATIM)
 endif()
 # ==== end crash watchdog ======================================================
@@ -184,3 +191,15 @@ target_link_libraries(crt_trace_test PRIVATE
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME crt_trace_test COMMAND crt_trace_test)
 # ==== end crt_trace_test ======================================================
+
+# ==== crt_cpu_bench  ============================================
+# Frame time of the CPU CRT renderer (the one Windows uses) at 100 / 150 / 200 % display scaling.
+juce_add_console_app(crt_cpu_bench PRODUCT_NAME "crt_cpu_bench")
+target_sources(crt_cpu_bench PRIVATE app/Tests/CrtCpuBench.cpp app/Source/ui/crt/CpuCrtRenderer.cpp app/Source/ui/PhosphorScreen.cpp)
+target_include_directories(crt_cpu_bench PRIVATE app/Source)
+target_compile_definitions(crt_cpu_bench PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(crt_cpu_bench PRIVATE
+    juce::juce_gui_basics
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+add_test(NAME crt_cpu_bench COMMAND crt_cpu_bench)
+# ==== end crt_cpu_bench =======================================================

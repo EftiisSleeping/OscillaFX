@@ -10,7 +10,7 @@
 //   AppPaths::resourcesDirectory()/Gallery; when those hold nothing, <repo>/assets/gallery (dev).
 // Pictures are decoded on a background thread straight to a <= 512 px thumbnail, converted to
 // luminance and auto-levelled. macOS decodes anything ImageIO reads (png / jpg / webp / heic ...);
-// Windows decodes what JUCE reads (png / jpg / gif).
+// Windows anything WIC reads (png / jpg / gif / tiff, webp / heic with the Store codecs), else JUCE.
 // Message thread only, apart from the internal decoder.
 namespace Crt
 {

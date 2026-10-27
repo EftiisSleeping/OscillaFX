@@ -1,4 +1,5 @@
 #include "audio/win/MMDeviceHelpers.h"
+#include "platform/win/WinEndpoints.h"
 
 #include <devicetopology.h>
 #include <mmreg.h>
@@ -19,39 +20,9 @@ constexpr GUID SUBTYPE_PCM        { 0x00000001, 0x0000, 0x0010, { 0x80, 0x00, 0x
 constexpr GUID SUBTYPE_IEEE_FLOAT { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
 
 // Name of the driver (FxSound's INF), and its pre-rename name still found on old installs.
-const wchar_t* const FXSOUND_NAMES[] = { L"FxSound Audio Enhancer", L"DFX Audio Enhancer" };
+const wchar_t* const FXSOUND_NAMES[] = { WinEndpoints::FXSOUND_ENDPOINT_NAME, L"DFX Audio Enhancer" };
 
 constexpr DWORD STEREO_MASK = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
-
-// ---------------------------------------------------------------- IPolicyConfig
-// Undocumented; layout as in FxSound's audiopassthru/include/PolicyConfig.h (Vista flavour, which
-// FxSound uses for default device and format on Vista through Windows 11).
-struct DeviceShareMode;
-
-MIDL_INTERFACE ("568b9108-44bf-40b4-9006-86afe5b5a620")
-IPolicyConfigVista : public IUnknown
-{
-    virtual HRESULT STDMETHODCALLTYPE GetMixFormat (PCWSTR, WAVEFORMATEX**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat (PCWSTR, INT, WAVEFORMATEXTENSIBLE**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat (PCWSTR, WAVEFORMATEXTENSIBLE*, WAVEFORMATEXTENSIBLE*) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod (PCWSTR, INT, PINT64, PINT64) = 0;
-    virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod (PCWSTR, PINT64) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetShareMode (PCWSTR, DeviceShareMode*) = 0;
-    virtual HRESULT STDMETHODCALLTYPE SetShareMode (PCWSTR, DeviceShareMode*) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetPropertyValue (PCWSTR, const PROPERTYKEY&, PROPVARIANT*) = 0;
-    virtual HRESULT STDMETHODCALLTYPE SetPropertyValue (PCWSTR, const PROPERTYKEY&, PROPVARIANT*) = 0;
-    virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint (PCWSTR, ERole) = 0;
-    virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility (PCWSTR, INT) = 0;
-};
-
-constexpr CLSID CLSID_POLICY_CONFIG_VISTA { 0x294935ce, 0xf637, 0x4e7c, { 0xa4, 0x1b, 0xab, 0x25, 0x54, 0x60, 0xb8, 0x62 } };
-
-ComPtr<IPolicyConfigVista> createPolicyConfig()
-{
-    ComPtr<IPolicyConfigVista> policy;
-    CoCreateInstance (CLSID_POLICY_CONFIG_VISTA, nullptr, CLSCTX_ALL, IID_PPV_ARGS (&policy));
-    return policy;
-}
 
 // ---------------------------------------------------------------- properties
 
@@ -189,15 +160,15 @@ juce::String findFxSoundEndpoint (IMMDeviceEnumerator& enumerator)
 
 bool setDefaultEndpoint (const juce::String& id, ERole role)
 {
-    auto policy = createPolicyConfig();
+    auto policy = WinEndpoints::detail::createPolicyConfig();
     return policy != nullptr && SUCCEEDED (policy->SetDefaultEndpoint (id.toWideCharPointer(), role));
 }
 
 bool matchDeviceFormat (const juce::String& id, int sampleRate, int channels)
 {
-    auto policy = createPolicyConfig();
+    auto policy = WinEndpoints::detail::createPolicyConfig();
     WAVEFORMATEXTENSIBLE* format = nullptr;
-    if (policy == nullptr || FAILED (policy->GetDeviceFormat (id.toWideCharPointer(), FALSE, &format)) || format == nullptr)
+    if (policy == nullptr || FAILED (policy->GetDeviceFormat (id.toWideCharPointer(), FALSE, (void**) &format)) || format == nullptr)
         return false;
 
     auto& base = format->Format;
