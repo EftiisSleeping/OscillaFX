@@ -431,7 +431,7 @@ begin
   case CurUninstallStep of
     usUninstall:
       begin
-        { The uninstaller runs elevated: HKCU and {userappdata} are those of the account that approved
+        { The uninstaller runs elevated: HKCU and the user AppData folder are those of the account that approved
           the UAC prompt, normally the signed-in user. Other accounts keep their settings. }
         RemoveUserSettings := (not UninstallSilent) and
           (MsgBox('Also remove the OscillaFX settings and per-device profiles of Windows user "' +
