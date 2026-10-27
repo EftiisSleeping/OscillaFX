@@ -1,6 +1,6 @@
 # Smoke test of OscillaFX-<version>-Setup-x64.exe on a throwaway Windows machine (CI runner):
 # silent install, upgrade over a running OscillaFX, silent uninstall. Changes the machine (installs the
-# FxSound driver and an HKCU Run value): do not run it on your own PC.
+# FxSound driver): do not run it on your own PC.
 # A driver that cannot be installed (no audio stack on the runner) is reported, not failed.
 # Usage: packaging\windows\test_installer.ps1 -Setup dist\OscillaFX-0.5.0-Setup-x64.exe
 #            [-AppBuildDir build-win\OscillaFX_artefacts\Release] [-LogDir logs]
@@ -66,6 +66,31 @@ function Get-AppProcesses {
 
 function Get-RunValue { (Get-ItemProperty $RunKey -Name OscillaFX -ErrorAction SilentlyContinue).OscillaFX }
 
+$EndpointsKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
+$EndpointName = "{026e516e-b814-414b-83cd-856d6fef4822},2"
+
+function Get-DriverEndpoints {
+    Get-ChildItem $EndpointsKey -ErrorAction SilentlyContinue | Where-Object {
+        (Get-ItemProperty "$($_.PSPath)\Properties" -Name $EndpointName -ErrorAction SilentlyContinue).$EndpointName -like "FxSound Audio Enhancer*"
+    }
+}
+
+function Get-EndpointState($Endpoint) { (Get-ItemProperty $Endpoint.PSPath -Name DeviceState).DeviceState -band 0xF }
+
+# Turns the endpoint off as "Don't allow" in Sound settings would; $false where Windows refuses the write.
+function Disable-DriverEndpoints {
+    try {
+        foreach ($endpoint in Get-DriverEndpoints) {
+            $state = (Get-ItemProperty $endpoint.PSPath -Name DeviceState).DeviceState
+            Set-ItemProperty $endpoint.PSPath -Name DeviceState -Value (($state -band -bnot 0xF) -bor 2) -Type DWord
+        }
+        $true
+    } catch {
+        Write-Warning "cannot disable the endpoint here: $_"
+        $false
+    }
+}
+
 function Assert-Installed {
     foreach ($file in "OscillaFX.exe", "OscillaWatchdog.exe", "LICENSE", "NOTICE.md", "unins000.exe", "Driver\fxdevcon.exe",
                       "Driver\fxvad.inf", "Driver\fxvad.sys", "Driver\fxvadntamd64.cat") {
@@ -89,13 +114,16 @@ function Wait-Uninstalled {
 }
 
 Write-Host "== install"
-Invoke-Setup $Setup ($SilentArgs + "/DIR=`"$InstallDir`"" + "/TASKS=startatlogin" + "/LOG=`"$LogDir\install.log`"")
+Invoke-Setup $Setup ($SilentArgs + "/DIR=`"$InstallDir`"" + "/LOG=`"$LogDir\install.log`"")
 Assert-Installed
-Assert-True ((Get-RunValue) -eq "`"$InstallDir\OscillaFX.exe`" --launched-at-login") "HKCU Run value OscillaFX"
+Assert-True ($null -eq (Get-RunValue)) "setup writes no login item (the app does)"
 $deviceCount = @(Get-DriverDevices -WithDriver).Count
 Write-Host "driver: $deviceCount working $DriverHwid device(s), $(@(Get-DriverDevices).Count) devnode(s) after install (blocked: $DriverBlocked)"
 Save-DriverDiagnostics
 Assert-True ($deviceCount -le 1) "at most one driver device"
+
+$endpointDisabled = $deviceCount -gt 0 -and @(Get-DriverEndpoints).Count -gt 0 -and (Disable-DriverEndpoints)
+Write-Host "endpoint disabled before upgrade: $endpointDisabled"
 
 Write-Host "== upgrade over a running OscillaFX"
 Start-Process "$InstallDir\OscillaFX.exe"
@@ -105,12 +133,22 @@ Invoke-Setup $Setup ($SilentArgs + "/DIR=`"$InstallDir`"" + "/LOG=`"$LogDir\upgr
 Assert-True (@(Get-AppProcesses).Count -eq 0) "setup quit OscillaFX"
 Assert-Installed
 Assert-True (@(Get-DriverDevices -WithDriver).Count -le 1) "upgrade adds no second driver device"
+if ($endpointDisabled) {
+    Assert-True (@(Get-DriverEndpoints | Where-Object { (Get-EndpointState $_) -eq 2 }).Count -eq 0) "upgrade re-enabled the disabled endpoint"
+}
+$quitPath = Select-String -Path "$LogDir\upgrade.log" -Pattern "OscillaFX (quit via|closed by|ended by) .*" | Select-Object -First 1
+Write-Host "upgrade quit path: $($quitPath.Matches.Value)"
 
 Write-Host "== uninstall"
+# The app's tray switch writes these; the uninstaller must clear them.
+Set-ItemProperty $RunKey -Name OscillaFX -Value "`"$InstallDir\OscillaFX.exe`" --launched-at-login"
+Start-Process "$InstallDir\OscillaFX.exe"
+Start-Sleep -Seconds 5
 Invoke-Setup "$InstallDir\unins000.exe" ($SilentArgs + "/LOG=`"$LogDir\uninstall.log`"")
 Wait-Uninstalled
 Assert-True (-not (Test-Path "$InstallDir\OscillaFX.exe")) "OscillaFX.exe removed"
 Assert-True (-not (Test-Path "$InstallDir\Driver")) "Driver folder removed"
 Assert-True ($null -eq (Get-RunValue)) "HKCU Run value removed"
+Assert-True (@(Get-AppProcesses).Count -eq 0) "uninstall quit OscillaFX"
 Assert-True (@(Get-DriverDevices).Count -eq 0) "driver device removed"
 Write-Host "driver: installed $deviceCount working device(s); blocked: $DriverBlocked; left after uninstall: 0"

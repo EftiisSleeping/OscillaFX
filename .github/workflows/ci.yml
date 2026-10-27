@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
   workflow_call: # release.yml reuses the Windows build, tests and installer
 
+permissions:
+  contents: read
+
 # Keyed by workflow too: a Release run calling this one must not cancel the push's CI run.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

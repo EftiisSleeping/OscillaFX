@@ -106,7 +106,8 @@ ships in `Oscilla.driver/Contents/Resources`.
 
 # Windows
 
-Requires Windows 10 or Windows 11, 64-bit (x64). Windows on ARM is not supported yet.
+Requires Windows 10 or Windows 11, 64-bit (x64). Windows on ARM (ARM64) is not supported yet: the
+x64 driver cannot load there, so setup refuses to run on it.
 
 ## Install
 
@@ -117,10 +118,9 @@ Requires Windows 10 or Windows 11, 64-bit (x64). Windows on ARM is not supported
      `Presets\`, `Gallery\`, `LICENSE`, `NOTICE.md`, and `Driver\` (driver files + `fxdevcon.exe`)
    - a Start menu shortcut, optionally a desktop shortcut
    - the virtual audio device **"FxSound Audio Enhancer"** (see below), unless it is already there
-   - optionally "Start OscillaFX when I sign in to Windows"
-     (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\OscillaFX`)
 
-   No reboot is needed. If setup reports that the driver could not be installed, restart Windows and
+   If the FxSound Audio Enhancer playback device was turned off in Sound settings, setup turns it
+   back on (or says where to do it). No reboot is needed. If setup reports that the driver could not be installed, restart Windows and
    run the setup again.
 
 ### "Windows protected your PC" (SmartScreen)
@@ -154,6 +154,10 @@ microphone**.
 
 Settings, per-device profiles and your own gallery pictures live in `%APPDATA%\OscillaFX`.
 
+To start OscillaFX when you sign in, turn on **Start at login** in its tray menu (it writes
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\OscillaFX`; Task Manager > Startup apps can
+disable it too). Setup does not set this: it runs as administrator, possibly as a different account.
+
 ## If OscillaFX crashes
 
 While OscillaFX runs, the default playback device is FxSound Audio Enhancer. If the app crashes or is
@@ -170,7 +174,8 @@ and keeps your settings.
 **Settings > Apps > Installed apps > OscillaFX > Uninstall** (or Control Panel > Programs). The
 uninstaller quits OscillaFX, removes its login entry, removes the FxSound Audio Enhancer device
 unless FxSound is installed, and asks whether to also delete your settings in `%APPDATA%\OscillaFX`
-(default: keep). Windows then uses your real output device again.
+(default: keep). The login entry and settings it removes are those of the Windows account that
+approved the administrator prompt, normally you; other accounts keep theirs. Windows then uses your real output device again.
 
 ## Building the installer
 

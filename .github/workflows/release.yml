@@ -14,6 +14,9 @@ on:
       - "driver/**"
       - ".github/workflows/release.yml"
 
+permissions:
+  contents: read
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true

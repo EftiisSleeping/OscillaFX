@@ -155,5 +155,7 @@ old "DFX Audio Enhancer"), as FxSound does.
    `prefersReducedMotion()` from `SPI_GETCLIENTAREAANIMATION`.
 6. **Installer** (done): `packaging/windows/OscillaFX.iss` (see `docs/INSTALL.md`, Windows). Installs
    every exe of the build folder (`OscillaFX.exe`, `OscillaWatchdog.exe`), `Presets/`, `Gallery/` and the
-   driver; stops both exes before upgrade / uninstall. The login item it writes is the same one
-   `LoginItem_win.cpp` manages: `HKCU\...\Run\OscillaFX` = `"<app>\OscillaFX.exe" --launched-at-login`.
+   driver (x64 Windows only, `x64os`); before upgrade / uninstall it runs `OscillaFX.exe --quit`, then
+   taskkill, then taskkill /F, and waits for the watchdog. It writes no per-user state; the uninstaller
+   removes the login item `LoginItem_win.cpp` manages (`HKCU\...\Run\OscillaFX` and its StartupApproved
+   flag) for the elevating account.

@@ -7,9 +7,11 @@
 ; The driver is FxSound's signed virtual audio device (driver/windows/README.md): it shows as
 ; "FxSound Audio Enhancer" and is shared with FxSound, so it is installed only when missing and
 ; removed only when FxSound is not installed.
+; Per-user state (login item, %APPDATA%\OscillaFX) is left to the app: setup runs elevated, possibly as a
+; different (admin) account. Only the uninstaller cleans it, for the account it runs as.
 
 #if Ver < EncodeVer(6, 3, 0)
-  #error Inno Setup 6.3 or newer is required (x64compatible, ExecAndCaptureOutput)
+  #error Inno Setup 6.3 or newer is required (x64os, ExecAndCaptureOutput)
 #endif
 #ifndef AppVersion
   #error Pass /DAppVersion=<x.y.z>
@@ -41,8 +43,9 @@ OutputBaseFilename=OscillaFX-{#AppVersion}-Setup-x64
 SetupIconFile={#SetupIcon}
 UninstallDisplayIcon={app}\OscillaFX.exe
 UninstallDisplayName=OscillaFX
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+; x64os, not x64compatible: Windows on ARM runs x64 apps but cannot load the x64 kernel driver.
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
 PrivilegesRequired=admin
 WizardStyle=modern
@@ -52,13 +55,10 @@ SolidCompression=yes
 CloseApplications=yes
 CloseApplicationsFilter=OscillaFX.exe,OscillaWatchdog.exe
 RestartApplications=no
-; The login item lives in HKCU of the user running setup (as the app writes it).
-UsedUserAreasWarning=no
 SetupLogging=yes
 
 [Tasks]
 Name: desktopicon; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: startatlogin; Description: "Start OscillaFX when I sign in to Windows"; GroupDescription: "Startup:"; Flags: unchecked
 
 [InstallDelete]
 ; Bundled presets and pictures are replaced as a whole, so ones dropped from a release disappear.
@@ -79,11 +79,6 @@ Source: "{#Fxdevcon}"; DestDir: "{app}\Driver"; DestName: "fxdevcon.exe"; Flags:
 Name: "{autoprograms}\OscillaFX"; Filename: "{app}\OscillaFX.exe"
 Name: "{autodesktop}\OscillaFX"; Filename: "{app}\OscillaFX.exe"; Tasks: desktopicon
 
-[Registry]
-; Same value platform/win/LoginItem_win.cpp manages from the app's "Start at login" switch.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OscillaFX"; \
-    ValueData: """{app}\OscillaFX.exe"" --launched-at-login"; Tasks: startatlogin; Flags: uninsdeletevalue
-
 [Run]
 Filename: "{app}\OscillaFX.exe"; Description: "{cm:LaunchProgram,OscillaFX}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
@@ -98,6 +93,13 @@ const
   UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
   RUN_KEY = 'Software\Microsoft\Windows\CurrentVersion\Run';
   STARTUP_APPROVED_KEY = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
+  RENDER_ENDPOINTS = 'SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render';
+  ENDPOINT_NAME_PROPERTY = '{026e516e-b814-414b-83cd-856d6fef4822},2'; { PKEY_DeviceInterface_FriendlyName }
+  ENDPOINT_STATE_MASK = $F;
+  ENDPOINT_DISABLED = 2; { DEVICE_STATE_DISABLED }
+  ENDPOINT_ACTIVE = 1;
+  CONFIGFLAG_DISABLED = 1;
+  GRACEFUL_QUIT_TIMEOUT_MS = 8000;
   QUIT_TIMEOUT_MS = 4000;
 
 var
@@ -143,17 +145,31 @@ begin
   Log('taskkill ' + Params + ' -> ' + IntToStr(ResultCode));
 end;
 
-{ Ask OscillaFX to close, then force it. The watchdog then restores the real output and exits on its
-  own; it is only killed if it lingers. }
+{ Ask OscillaFX to quit through its own --quit (it restores the default device first), then
+  taskkill (window close request), then taskkill /F. The watchdog then restores the real output and
+  exits on its own; it is only killed if it lingers. }
 procedure QuitOscillaFX;
+var
+  AppPath: string;
+  ResultCode: Integer;
 begin
   if IsProcessRunning(APP_EXE) then
   begin
-    TaskKill(APP_EXE, False);
-    if not WaitForExit(APP_EXE, QUIT_TIMEOUT_MS) then
+    AppPath := ExpandConstant('{app}\' + APP_EXE);
+    if FileExists(AppPath) and Exec(AppPath, '--quit', '', SW_HIDE, ewNoWait, ResultCode) and
+       WaitForExit(APP_EXE, GRACEFUL_QUIT_TIMEOUT_MS) then
+      Log('OscillaFX quit via --quit')
+    else
     begin
-      TaskKill(APP_EXE, True);
-      WaitForExit(APP_EXE, QUIT_TIMEOUT_MS);
+      TaskKill(APP_EXE, False);
+      if WaitForExit(APP_EXE, QUIT_TIMEOUT_MS) then
+        Log('OscillaFX closed by taskkill')
+      else
+      begin
+        TaskKill(APP_EXE, True);
+        WaitForExit(APP_EXE, QUIT_TIMEOUT_MS);
+        Log('OscillaFX ended by taskkill /F');
+      end;
     end;
   end;
   if not WaitForExit(WATCHDOG_EXE, QUIT_TIMEOUT_MS) then
@@ -187,10 +203,27 @@ end;
 
 { fxdevcon creates root devnodes ROOT\MEDIA\<n>; HardwareID is a multi-string whose first entry is the id.
   A devnode whose driver install failed (prompt declined, reboot pending) has no Service value. }
+function IsDriverDevice(const InstanceKey: string; var HardwareId: string): Boolean;
+var
+  HardwareIds: string;
+begin
+  Result := RegQueryMultiStringValue(HKLM64, InstanceKey, 'HardwareID', HardwareIds) and
+            (Pos(Uppercase(DRIVER_HWID) + #0, Uppercase(HardwareIds) + #0) = 1);
+  if Result then
+    HardwareId := Copy(HardwareIds, 1, Length(DRIVER_HWID));
+end;
+
+function HasDriverService(const InstanceKey: string): Boolean;
+var
+  Service: string;
+begin
+  Result := RegQueryStringValue(HKLM64, InstanceKey, 'Service', Service) and (CompareText(Service, 'FXVAD') = 0);
+end;
+
 function CountDriverDevices(WorkingOnly: Boolean): Integer;
 var
   Instances: TArrayOfString;
-  InstanceKey, HardwareIds, Service: string;
+  InstanceKey, HardwareId: string;
   I: Integer;
 begin
   Result := 0;
@@ -199,14 +232,87 @@ begin
   for I := 0 to GetArrayLength(Instances) - 1 do
   begin
     InstanceKey := ROOT_MEDIA_DEVICES + '\' + Instances[I];
-    if not RegQueryMultiStringValue(HKLM64, InstanceKey, 'HardwareID', HardwareIds) or
-       (Pos(Uppercase(DRIVER_HWID) + #0, Uppercase(HardwareIds) + #0) <> 1) then
-      Continue;
-    if WorkingOnly and not (RegQueryStringValue(HKLM64, InstanceKey, 'Service', Service) and
-                            (CompareText(Service, 'FXVAD') = 0)) then
-      Continue;
-    Result := Result + 1;
+    if IsDriverDevice(InstanceKey, HardwareId) and (not WorkingOnly or HasDriverService(InstanceKey)) then
+      Result := Result + 1;
   end;
+end;
+
+{ fxdevcon remove compares the hardware id case-sensitively: FxSound's x64 installer (and this one)
+  writes Root\FXVAD, its ARM64 one root\fxvad. Returns the id as stored, '' if there is no device. }
+function FirstDriverHardwareId: string;
+var
+  Instances: TArrayOfString;
+  HardwareId: string;
+  I: Integer;
+begin
+  Result := '';
+  if RegGetSubkeyNames(HKLM64, ROOT_MEDIA_DEVICES, Instances) then
+    for I := 0 to GetArrayLength(Instances) - 1 do
+      if IsDriverDevice(ROOT_MEDIA_DEVICES + '\' + Instances[I], HardwareId) then
+      begin
+        Result := HardwareId;
+        Exit;
+      end;
+end;
+
+function IsDriverDeviceDisabled: Boolean;
+var
+  Instances: TArrayOfString;
+  InstanceKey, HardwareId: string;
+  ConfigFlags: Cardinal;
+  I: Integer;
+begin
+  Result := False;
+  if RegGetSubkeyNames(HKLM64, ROOT_MEDIA_DEVICES, Instances) then
+    for I := 0 to GetArrayLength(Instances) - 1 do
+    begin
+      InstanceKey := ROOT_MEDIA_DEVICES + '\' + Instances[I];
+      if IsDriverDevice(InstanceKey, HardwareId) and RegQueryDWordValue(HKLM64, InstanceKey, 'ConfigFlags', ConfigFlags) and
+         ((ConfigFlags and CONFIGFLAG_DISABLED) <> 0) then
+        Result := True;
+    end;
+end;
+
+{ As FxSound: a playback endpoint turned off in Sound settings ("Don't allow") is switched back on.
+  Returns False when one stays disabled (the registry write was refused). }
+function EnableDriverEndpoints: Boolean;
+var
+  Endpoints: TArrayOfString;
+  EndpointKey, Name: string;
+  State: Cardinal;
+  I: Integer;
+begin
+  Result := True;
+  if not RegGetSubkeyNames(HKLM64, RENDER_ENDPOINTS, Endpoints) then
+    Exit;
+  for I := 0 to GetArrayLength(Endpoints) - 1 do
+  begin
+    EndpointKey := RENDER_ENDPOINTS + '\' + Endpoints[I];
+    if not (RegQueryStringValue(HKLM64, EndpointKey + '\Properties', ENDPOINT_NAME_PROPERTY, Name) and
+            (CompareText(Copy(Name, 1, Length(DRIVER_NAME)), DRIVER_NAME) = 0) and
+            RegQueryDWordValue(HKLM64, EndpointKey, 'DeviceState', State) and
+            ((State and ENDPOINT_STATE_MASK) = ENDPOINT_DISABLED)) then
+      Continue;
+    if RegWriteDWordValue(HKLM64, EndpointKey, 'DeviceState', (State and not ENDPOINT_STATE_MASK) or ENDPOINT_ACTIVE) then
+      Log('Re-enabled disabled endpoint ' + Endpoints[I])
+    else
+    begin
+      Log('Could not re-enable disabled endpoint ' + Endpoints[I]);
+      Result := False;
+    end;
+  end;
+end;
+
+procedure CheckDriverEnabled;
+begin
+  if IsDriverDeviceDisabled then
+    SuppressibleMsgBox('The "' + DRIVER_NAME + '" device is disabled in Device Manager, so OscillaFX cannot process sound.' + #13#10#13#10 +
+      'Open Device Manager > Sound, video and game controllers, right-click "' + DRIVER_NAME + '" > Enable device.',
+      mbInformation, MB_OK, IDOK)
+  else if not EnableDriverEndpoints then
+    SuppressibleMsgBox('The "' + DRIVER_NAME + '" playback device is turned off in Sound settings, so OscillaFX cannot process sound.' + #13#10#13#10 +
+      'Open Settings > System > Sound > All sound devices, select "' + DRIVER_NAME + '" and click Allow.',
+      mbInformation, MB_OK, IDOK);
 end;
 
 function DriverDir: string;
@@ -248,13 +354,15 @@ end;
 { fxdevcon removes one matching device per call. }
 procedure RemoveDriverDevices;
 var
+  HardwareId: string;
   Attempt: Integer;
 begin
   for Attempt := 1 to 8 do
   begin
-    if CountDriverDevices(False) = 0 then
+    HardwareId := FirstDriverHardwareId;
+    if HardwareId = '' then
       Break;
-    if not RunFxdevcon('remove ' + DRIVER_HWID) then
+    if not RunFxdevcon('remove ' + HardwareId) then
       Break;
   end;
 end;
@@ -264,6 +372,7 @@ begin
   if CountDriverDevices(True) > 0 then
   begin
     Log('The ' + DRIVER_HWID + ' device already works (OscillaFX or FxSound): driver left as is');
+    CheckDriverEnabled;
     Exit;
   end;
   RemoveDriverDevices; { leftovers of an earlier failed attempt }
@@ -271,6 +380,7 @@ begin
   if RunFxdevcon('install "' + DriverDir + '\fxvad.inf" ' + DRIVER_HWID) then
   begin
     SetPowerRequestOverride('SYSTEM');
+    CheckDriverEnabled;
     Exit;
   end;
   SuppressibleMsgBox('OscillaFX is installed, but its audio driver ("' + DRIVER_NAME + '") could not be installed, ' +
@@ -321,12 +431,15 @@ begin
   case CurUninstallStep of
     usUninstall:
       begin
+        { The uninstaller runs elevated: HKCU and {userappdata} are those of the account that approved
+          the UAC prompt, normally the signed-in user. Other accounts keep their settings. }
         RemoveUserSettings := (not UninstallSilent) and
-          (MsgBox('Also remove your OscillaFX settings and per-device profiles?' + #13#10 +
-                  ExpandConstant('{userappdata}\OscillaFX') + #13#10#13#10 + 'Choose No to keep them for a later install.',
+          (MsgBox('Also remove the OscillaFX settings and per-device profiles of Windows user "' +
+                  ExpandConstant('{username}') + '"?' + #13#10 + ExpandConstant('{userappdata}\OscillaFX') + #13#10#13#10 +
+                  'Choose No to keep them for a later install.',
                   mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES);
         QuitOscillaFX;
-        RegDeleteValue(HKCU, RUN_KEY, 'OscillaFX');
+        RegDeleteValue(HKCU, RUN_KEY, 'OscillaFX'); { login item set from the app's tray menu }
         RegDeleteValue(HKCU, STARTUP_APPROVED_KEY, 'OscillaFX'); { Task Manager's enabled/disabled flag }
         RemoveDriver;
       end;
