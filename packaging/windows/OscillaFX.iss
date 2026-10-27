@@ -279,8 +279,8 @@ function InitializeSetup: Boolean;
 begin
   Result := True;
   while Result and IsProcessRunning(FXSOUND_EXE) do
-    Result := SuppressibleMsgBox('FxSound is running. OscillaFX and FxSound use the same audio driver and cannot run at the same time.' +
-      #13#10#13#10 + 'Quit FxSound (right-click its icon in the taskbar notification area > Exit), then click Retry.',
+    Result := SuppressibleMsgBox('FxSound is running. OscillaFX and FxSound use the same audio driver and cannot run at the same time.' + #13#10#13#10 +
+      'Quit FxSound (right-click its icon in the taskbar notification area > Exit), then click Retry.',
       mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY;
   if Result and IsFxSoundInstalled then
     SuppressibleMsgBox('FxSound is installed on this PC. OscillaFX uses the same "' + DRIVER_NAME + '" driver.' + #13#10#13#10 +
