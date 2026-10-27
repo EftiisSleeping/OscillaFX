@@ -1,0 +1,43 @@
+name: Release
+
+# Builds the release installers as workflow artifacts; publishing a GitHub release stays manual.
+#   Windows: OscillaFX-windows-x64-setup  (OscillaFX-<version>-Setup-x64.exe, via ci.yml)
+#   macOS:   OscillaFX-macos-pkg          (OscillaFX-<version>.pkg, universal arm64 + x86_64)
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    # Branch pushes only when packaging changes (path filters do not apply to tag pushes).
+    branches: ["**"]
+    paths:
+      - "packaging/**"
+      - "driver/**"
+      - ".github/workflows/release.yml"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    uses: ./.github/workflows/ci.yml
+
+  macos-pkg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build universal .pkg
+        run: packaging/build_release.sh
+      - name: Check package
+        run: |
+          pkg="$(ls dist/OscillaFX-*.pkg)"
+          pkgutil --check-signature "$pkg" || true # unsigned by design
+          pkgutil --payload-files "$pkg" | grep -E 'OscillaFX.app/Contents/MacOS/OscillaFX$|Oscilla.driver/Contents/Info.plist$'
+      - name: Upload .pkg
+        uses: actions/upload-artifact@v4
+        with:
+          name: OscillaFX-macos-pkg
+          path: dist/OscillaFX-*.pkg
+          if-no-files-found: error

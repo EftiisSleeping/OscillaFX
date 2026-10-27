@@ -1,3 +1,5 @@
 # Presets are compared with what engine/tools/make_preset writes: keep them exactly as committed.
 *.fac -text
 *.sh text eol=lf
+# Vendored FxSound driver (signed: the catalog hashes the exact INF/SYS bytes) and fxdevcon sources: never convert.
+driver/windows/** -text

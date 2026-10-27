@@ -1,5 +1,10 @@
 # Installing OscillaFX
 
+- [macOS](#macos): macOS 13 (Ventura) or later, Apple silicon or Intel.
+- [Windows](#windows): Windows 10 or 11, 64-bit (x64).
+
+# macOS
+
 Requires macOS 13 (Ventura) or later, Apple silicon or Intel.
 
 ## Install
@@ -98,3 +103,86 @@ The driver is upstream BlackHole (GPL-3.0) in `driver/third_party/BlackHole`, le
 `driver/build.sh` copies it into the build directory and applies `driver/patches/*.patch`
 (OscillaFX names for device, box, manufacturer and plug-in factory). The upstream `LICENSE`
 ships in `Oscilla.driver/Contents/Resources`.
+
+# Windows
+
+Requires Windows 10 or Windows 11, 64-bit (x64). Windows on ARM is not supported yet.
+
+## Install
+
+1. Quit FxSound if it runs (right-click its icon in the taskbar notification area > Exit), and any other
+   system-wide audio enhancer. See [FxSound](#fxsound) below.
+2. Run `OscillaFX-<version>-Setup-x64.exe` and confirm the administrator (UAC) prompt. It installs:
+   - `C:\Program Files\OscillaFX`: `OscillaFX.exe`, `OscillaWatchdog.exe` (when the build has it),
+     `Presets\`, `Gallery\`, `LICENSE`, `NOTICE.md`, and `Driver\` (driver files + `fxdevcon.exe`)
+   - a Start menu shortcut, optionally a desktop shortcut
+   - the virtual audio device **"FxSound Audio Enhancer"** (see below), unless it is already there
+   - optionally "Start OscillaFX when I sign in to Windows"
+     (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\OscillaFX`)
+
+   No reboot is needed. If setup reports that the driver could not be installed, restart Windows and
+   run the setup again.
+
+### "Windows protected your PC" (SmartScreen)
+
+The installer is not code-signed, so Microsoft Defender SmartScreen may stop it the first time:
+click **More info**, then **Run anyway**. If the browser blocks the download, keep it from the
+browser's download list (Edge: "..." > Keep > Show more > Keep anyway).
+
+### The device is called "FxSound Audio Enhancer"
+
+OscillaFX uses FxSound's virtual audio driver, which is signed by Microsoft for FxSound. Its name
+is part of the signed package and cannot be changed, so Windows' sound settings show
+**FxSound Audio Enhancer** (manufacturer "FxSound") while OscillaFX runs. That device is OscillaFX's
+input; leave it alone and pick your real speakers or headphones inside OscillaFX.
+
+### FxSound
+
+FxSound and OscillaFX share that driver and both take over the default output, so do not run them at
+the same time. Setup refuses to continue while FxSound runs and warns when FxSound is installed.
+To keep FxSound installed, turn off its start with Windows. Uninstalling FxSound also removes the
+shared driver: run the OscillaFX setup again afterwards to put it back. Uninstalling OscillaFX keeps
+the driver when FxSound is installed.
+
+## First run
+
+Open OscillaFX from the Start menu. It routes system sound through the FxSound Audio Enhancer
+device, processes it and plays it on your real output; nothing is recorded or stored. If the
+visualizer stays flat or Windows reports that access is blocked, open **Settings > Privacy &
+security > Microphone** and turn on **Microphone access** and **Let desktop apps access your
+microphone**.
+
+Settings, per-device profiles and your own gallery pictures live in `%APPDATA%\OscillaFX`.
+
+## Updating
+
+Run the new setup. It quits a running OscillaFX first (the watchdog then puts your real output back)
+and keeps your settings.
+
+## Uninstall
+
+**Settings > Apps > Installed apps > OscillaFX > Uninstall** (or Control Panel > Programs). The
+uninstaller quits OscillaFX, removes its login entry, removes the FxSound Audio Enhancer device
+unless FxSound is installed, and asks whether to also delete your settings in `%APPDATA%\OscillaFX`
+(default: keep). Windows then uses your real output device again.
+
+## Building the installer
+
+```powershell
+cmake -S . -B build-win -A x64
+cmake --build build-win --config Release
+packaging\windows\build_installer.ps1     # -> dist\OscillaFX-<version>-Setup-x64.exe
+```
+
+Needs Visual Studio 2022 or newer with C++, CMake 3.22+, Python 3 with Pillow (`pip install pillow`)
+and Inno Setup 6.3+. The script builds `fxdevcon.exe` from FxSound's source
+(`driver/windows/fxdevcon`), checks the vendored driver against `driver/windows/SHA256SUMS`,
+turns `packaging/icon/OscillaFX.png` into the setup icon and runs `packaging/windows/OscillaFX.iss`.
+The version comes from `project(OscillaFX VERSION ...)` in `CMakeLists.txt`.
+`packaging/windows/test_installer.ps1` is the CI smoke test (silent install, upgrade, uninstall); it
+changes the machine, so run it only on a throwaway VM.
+
+CI (`.github/workflows/ci.yml`) builds and tests the installer on every push (artifact
+`OscillaFX-windows-x64-setup`). `.github/workflows/release.yml` (tags `v*`, manual runs, packaging
+changes) also builds the universal macOS `.pkg` (artifact `OscillaFX-macos-pkg`). Neither
+publishes a release.

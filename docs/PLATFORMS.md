@@ -29,6 +29,8 @@ engine/          DfxDsp (ported FxSound DSP), builds on both
   shim/                       Windows SDK stand-ins, macOS only
 helper/          OscillaWatchdog, macOS only
 driver/          BlackHole-based HAL driver, macOS only
+  windows/       FxSound's signed virtual audio driver + fxdevcon source, Windows (README.md there)
+packaging/       build_release.sh (.pkg, macOS); windows/ Inno Setup installer + build/test scripts
 ```
 
 Rule: anything under a `mac/` or `win/` folder is built only on that OS (`OSCILLA_OS` in the
@@ -83,8 +85,10 @@ cases (need admin rights or developer mode on Windows) are skipped on Windows.
 `engine_selftest` runs from the repo root (macOS `__FILE__` is repo-relative).
 macOS also runs `engine/run_tests.sh` and `helper/test_watchdog.sh`.
 
-CI: `.github/workflows/ci.yml` (macOS arm64 Release; Windows MSVC 2022 x64 Release, uploads the
-built `OscillaFX.exe` folder).
+CI: `.github/workflows/ci.yml` (macOS arm64 Release; Windows MSVC x64 Release, uploads the
+built `OscillaFX.exe` folder, builds the installer, smoke-tests it with a silent install / upgrade /
+uninstall and uploads `OscillaFX-<version>-Setup-x64.exe`). `.github/workflows/release.yml` (tags `v*`,
+manual) reuses it and adds the universal macOS `.pkg`.
 
 ## How Windows audio will work
 
@@ -115,7 +119,7 @@ The UI must call it that, and the engine must find it by that name / hardware id
    Windows watchdog (`platform/win/CrashWatchdog_win.cpp::launch()`): a small helper exe that waits
    on the app's process handle and restores the endpoint named in `restoreFile()` if the pid matches.
 3. **Platform services**: `platform/win/LoginItem_win.cpp` (HKCU `...\CurrentVersion\Run\OscillaFX`
-   = `"<exe>" --login`, `launchedAtLogin` from that argument); `--unregister-login-item` for the
+   = `"<exe>" --launched-at-login`, `launchedAtLogin` from that argument); `--unregister-login-item` for the
    uninstaller already reaches `LoginItem::setEnabled(false)` in `Main.cpp`.
    `platform/win/MicrophoneAccess_win.cpp` may stay "granted" (loopback capture needs no consent).
 4. **Images**: WIC in `platform/win/ImageValidation_win.cpp` and `ui/crt/win/GalleryDecode_win.cpp`
@@ -125,7 +129,6 @@ The UI must call it that, and the engine must find it by that name / hardware id
    on a dark taskbar: `ui/TrayIcon.cpp`); copy that says "menu bar" / "System Settings"; optional
    GPU CRT (Direct3D 11 or OpenGL implementing the `GpuCrtView` interface) and
    `prefersReducedMotion()` from `SPI_GETCLIENTAREAANIMATION`.
-6. **Installer**: install the signed driver with FxSound's `fxdevcon64.exe install fxvad.inf`
-   (source `Installer/DfxInstall/fxdevcon`), install `OscillaFX.exe` + `Presets/` + `Gallery/`,
-   uninstall with `fxdevcon64.exe remove` and `OscillaFX.exe --unregister-login-item`. AGPL-3.0
-   notices for the FxSound driver and tools go into `NOTICE.md`.
+6. **Installer**: done, `packaging/windows/OscillaFX.iss` (see `docs/INSTALL.md`, Windows). It writes the
+   login item as `HKCU\...\Run\OscillaFX` = `"<app>\OscillaFX.exe" --launched-at-login` (same argument as
+   macOS); `LoginItem_win.cpp` must use that exact value name and argument.
