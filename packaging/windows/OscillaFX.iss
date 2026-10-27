@@ -184,20 +184,28 @@ begin
             HasFxSoundUninstallEntry(HKCU);
 end;
 
-{ fxdevcon creates root devnodes ROOT\MEDIA\<n>; HardwareID is a multi-string whose first entry is the id. }
-function CountDriverDevices: Integer;
+{ fxdevcon creates root devnodes ROOT\MEDIA\<n>; HardwareID is a multi-string whose first entry is the id.
+  A devnode whose driver install failed (prompt declined, reboot pending) has no Service value. }
+function CountDriverDevices(WorkingOnly: Boolean): Integer;
 var
   Instances: TArrayOfString;
-  HardwareIds: string;
+  InstanceKey, HardwareIds, Service: string;
   I: Integer;
 begin
   Result := 0;
   if not RegGetSubkeyNames(HKLM64, ROOT_MEDIA_DEVICES, Instances) then
     Exit;
   for I := 0 to GetArrayLength(Instances) - 1 do
-    if RegQueryMultiStringValue(HKLM64, ROOT_MEDIA_DEVICES + '\' + Instances[I], 'HardwareID', HardwareIds) and
-       (Pos(Uppercase(DRIVER_HWID) + #0, Uppercase(HardwareIds) + #0) = 1) then
-      Result := Result + 1;
+  begin
+    InstanceKey := ROOT_MEDIA_DEVICES + '\' + Instances[I];
+    if not RegQueryMultiStringValue(HKLM64, InstanceKey, 'HardwareID', HardwareIds) or
+       (Pos(Uppercase(DRIVER_HWID) + #0, Uppercase(HardwareIds) + #0) <> 1) then
+      Continue;
+    if WorkingOnly and not (RegQueryStringValue(HKLM64, InstanceKey, 'Service', Service) and
+                            (CompareText(Service, 'FXVAD') = 0)) then
+      Continue;
+    Result := Result + 1;
+  end;
 end;
 
 function DriverDir: string;
@@ -236,13 +244,28 @@ begin
   Log('powercfg request override "' + Requests + '" -> ' + IntToStr(ResultCode));
 end;
 
+{ fxdevcon removes one matching device per call. }
+procedure RemoveDriverDevices;
+var
+  Attempt: Integer;
+begin
+  for Attempt := 1 to 8 do
+  begin
+    if CountDriverDevices(False) = 0 then
+      Break;
+    if not RunFxdevcon('remove ' + DRIVER_HWID) then
+      Break;
+  end;
+end;
+
 procedure InstallDriver;
 begin
-  if CountDriverDevices > 0 then
+  if CountDriverDevices(True) > 0 then
   begin
-    Log('The ' + DRIVER_HWID + ' device already exists (OscillaFX or FxSound): driver left as is');
+    Log('The ' + DRIVER_HWID + ' device already works (OscillaFX or FxSound): driver left as is');
     Exit;
   end;
+  RemoveDriverDevices; { leftovers of an earlier failed attempt }
   WizardForm.StatusLabel.Caption := 'Installing the audio driver (' + DRIVER_NAME + ')...';
   if RunFxdevcon('install "' + DriverDir + '\fxvad.inf" ' + DRIVER_HWID) then
   begin
@@ -255,23 +278,14 @@ begin
     ExpandConstant('{log}'), mbError, MB_OK, IDOK);
 end;
 
-{ fxdevcon removes one matching device per call; also clears duplicates left by older installs. }
 procedure RemoveDriver;
-var
-  Attempt: Integer;
 begin
   if IsFxSoundInstalled then
   begin
     Log('FxSound is installed and uses the same driver: driver kept');
     Exit;
   end;
-  for Attempt := 1 to 8 do
-  begin
-    if CountDriverDevices = 0 then
-      Break;
-    if not RunFxdevcon('remove ' + DRIVER_HWID) then
-      Break;
-  end;
+  RemoveDriverDevices;
   SetPowerRequestOverride('');
 end;
 
