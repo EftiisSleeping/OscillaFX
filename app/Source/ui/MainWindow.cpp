@@ -12,8 +12,33 @@ namespace
     constexpr float maximumScale = 1.5f;
     constexpr int screenMargin = 60;
 
+    constexpr float captionBottom = 50.0f;   // design units: the badge / title / device-plate strip
+    constexpr int resizeEdge = 6;            // window px left to the edge-resize emulation at the very top
+
     int heightForWidth (int width) { return juce::roundToInt ((float) width * D::height / D::width); }
     int widthForHeight (int height) { return juce::roundToInt ((float) height * D::width / D::height); }
+}
+
+MainWindow::ScaledHost::ScaledHost (Controller& c, juce::DocumentWindow& window)
+    : panel (c),
+      windowButtons (WindowChrome::createWindowButtons ([&window] { window.setMinimised (true); },
+                                                        [&window] { window.closeButtonPressed(); }))
+{
+    addAndMakeVisible (panel);
+    if (windowButtons != nullptr)
+    {
+        panel.addAndMakeVisible (*windowButtons);
+        windowButtons->setBounds (D::windowButtons.toNearestInt());
+    }
+}
+
+bool MainWindow::ScaledHost::isCaptionAt (juce::Point<float> position) const
+{
+    const auto design = position.transformedBy (panel.getTransform().inverted());
+    if (design.y >= captionBottom || position.y < (float) resizeEdge)
+        return false;
+    // getComponentAt only hit-tests locally (never the OS), so it is safe inside findControlAtPoint.
+    return const_cast<MainPanel&> (panel).getComponentAt (design) == &panel;
 }
 
 void MainWindow::ScaledHost::resized()
@@ -64,9 +89,11 @@ void MainWindow::PanelConstrainer::checkBounds (juce::Rectangle<int>& bounds, co
 //==============================================================================
 MainWindow::MainWindow (Controller& controller)
     : juce::DocumentWindow ("OscillaFX", Theme::desk, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
-      host (controller)
+      host (controller, *this)
 {
-    setUsingNativeTitleBar (true);
+    setUsingNativeTitleBar (! WindowChrome::drawsOwnTitleBar());
+    if (WindowChrome::drawsOwnTitleBar())
+        setTitleBarHeight (0);
     if (auto* peer = getPeer())
         WindowChrome::useFullSizeContent (*peer);
     setContentNonOwned (&host, false);
@@ -106,7 +133,20 @@ void MainWindow::visibilityChanged()
 
 void MainWindow::closeButtonPressed()
 {
-    setVisible (false); // keeps running in the menu bar; the Dock icon or menu bar item brings it back
+    setVisible (false); // keeps running in the menu bar / tray; the Dock icon, tray icon or a relaunch brings it back
+}
+
+juce::BorderSize<int> MainWindow::getBorderThickness() const
+{
+    // Windows: the panel reaches the window edge; JUCE emulates the resize border inside it.
+    return WindowChrome::drawsOwnTitleBar() ? juce::BorderSize<int>() : juce::DocumentWindow::getBorderThickness();
+}
+
+juce::Component::WindowControlKind MainWindow::findControlAtPoint (juce::Point<float> position) const
+{
+    if (! WindowChrome::drawsOwnTitleBar())
+        return juce::DocumentWindow::findControlAtPoint (position);
+    return host.isCaptionAt (position) ? WindowControlKind::caption : WindowControlKind::client;
 }
 
 void MainWindow::present()

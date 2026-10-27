@@ -4,6 +4,10 @@
 
 namespace WindowChrome
 {
+bool drawsOwnTitleBar() { return false; }
+
+std::unique_ptr<juce::Component> createWindowButtons (std::function<void()>, std::function<void()>) { return nullptr; }
+
 void useFullSizeContent (juce::ComponentPeer& peer)
 {
     auto* view = (NSView*) peer.getNativeHandle();

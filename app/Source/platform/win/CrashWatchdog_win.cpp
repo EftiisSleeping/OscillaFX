@@ -61,7 +61,7 @@ void onHelperExit()
 
 void CALLBACK helperExited (void*, BOOLEAN)
 {
-    juce::MessageManager::callAsync (onHelperExit);
+    juce::MessageManager::callAsync ([] { onHelperExit(); });
 }
 
 bool spawnHelper()

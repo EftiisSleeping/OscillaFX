@@ -241,8 +241,13 @@ void MainPanel::configureMaster()
     deviceButton.onClick = [this] { showDeviceMenu(); };
 
     microphoneButton.setButtonText ("ALLOW MICROPHONE");
+   #if JUCE_WINDOWS
+    describe (microphoneButton, "OscillaFX needs microphone access to hear your PC's sound - opens "
+                                "Settings > Privacy & security > Microphone");
+   #else
     describe (microphoneButton, "OscillaFX needs microphone access to hear your Mac's sound - opens "
                                 "System Settings > Privacy & Security > Microphone");
+   #endif
     microphoneButton.onClick = [this] { controller.openMicrophoneSettings(); };
 }
 
@@ -833,7 +838,11 @@ void MainPanel::showTour()
     tour.setAvoidArea (D::glass.expanded (20.0f));
     tour.start ({
         { "Switch it on",
+         #if JUCE_WINDOWS
+          "Flip POWER to ON. Everything your PC plays now goes through OscillaFX.",
+         #else
           "Flip POWER to ON. If your Mac asks for the microphone, choose Allow (or press ALLOW MICROPHONE).",
+         #endif
           juce::Rectangle<float> (powerSwitchWidth, powerSwitchHeight).withCentre (D::powerSwitch).expanded (18.0f, 36.0f) },
         { "Pick a sound",
           "Turn PRESET or press the arrows to choose Movies, Music and more.",
